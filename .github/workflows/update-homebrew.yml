@@ -52,11 +52,11 @@ jobs:
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@082c94ee19e776205cfa8e43802917d1425e2fe7 # main
 
-      - name: Tap the repository
-        run: brew tap JacksonFergusonDev/homebrew-tap ./homebrew-tap
-
       - name: Trust the tap
         run: brew trust JacksonFergusonDev/tap
+
+      - name: Tap the repository
+        run: brew tap JacksonFergusonDev/homebrew-tap ./homebrew-tap
 
       - name: Update Formula
         id: update
