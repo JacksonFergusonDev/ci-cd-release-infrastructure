@@ -143,3 +143,88 @@ def test_main_missing_caller_dir(mocker, tmp_path):
     )
     with pytest.raises(SystemExit, match="Caller directory not found"):
         update_homebrew_local.main()
+
+
+def test_main_inferred_from_pyproject(mocker, tmp_path):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "focal"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+
+    tap_dir = tmp_path / "tap"
+    formula_dir = tap_dir / "Formula"
+    formula_dir.mkdir(parents=True)
+    formula_path = formula_dir / "focal.rb"
+    formula_path.write_text(
+        'class Focal < Formula\n  url "old"\n  sha256 "old"\n  # RESOURCE_BLOCK_START\n  # RESOURCE_BLOCK_END\nend',
+        encoding="utf-8",
+    )
+
+    output_file = tmp_path / "github_output.txt"
+    mocker.patch.dict("os.environ", {"GITHUB_OUTPUT": str(output_file)})
+
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew_local.py",
+            "--repo",
+            "JacksonFergusonDev/focal",
+            "--tag",
+            "v0.1.0",
+            "--caller-dir",
+            str(caller_dir),
+            "--tap-dir",
+            str(tap_dir),
+        ],
+    )
+
+    mocker.patch("scripts.update_homebrew_local.get_sha256", return_value="sha_123")
+
+    def mock_run_cmd(args, cwd=None):
+        if "-o" in args:
+            output_file = Path(args[args.index("-o") + 1])
+            output_file.write_text("", encoding="utf-8")
+        return ""
+
+    mocker.patch("scripts.update_homebrew_local.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts.update_homebrew_local.splice_formula")
+
+    update_homebrew_local.main()
+
+    output_content = output_file.read_text(encoding="utf-8")
+    assert "package_name=focal\n" in output_content
+    assert "formula_path=Formula/focal.rb\n" in output_content
+
+
+def test_main_formula_mismatch_with_pyproject(mocker, tmp_path):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "focal"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+
+    wrong_formula = tmp_path / "wrong-cli.rb"
+    wrong_formula.touch()
+
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew_local.py",
+            "--repo",
+            "JacksonFergusonDev/focal",
+            "--tag",
+            "v0.1.0",
+            "--formula",
+            str(wrong_formula),
+            "--caller-dir",
+            str(caller_dir),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        update_homebrew_local.main()
+
+    err = str(exc_info.value)
+    assert "Formula path mismatch!" in err
+    assert "Expected project/package: 'focal'" in err

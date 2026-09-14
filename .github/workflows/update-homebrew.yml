@@ -8,13 +8,15 @@ on:
         required: true
         type: string
       package_name:
-        description: 'The PyPI package name (e.g., protostar)'
-        required: true
+        description: 'The PyPI package name (optional, inferred from caller pyproject.toml)'
+        required: false
         type: string
+        default: ''
       formula_path:
-        description: 'Relative path to the formula in the tap (e.g., Formula/protostar.rb)'
-        required: true
+        description: 'Relative path to the formula in the tap (optional, defaults to Formula/<package_name>.rb)'
+        required: false
         type: string
+        default: ''
     secrets:
       TAP_GITHUB_TOKEN:
         required: true
@@ -24,6 +26,11 @@ jobs:
     name: Sync Formula & Python Resources
     runs-on: ubuntu-latest
     steps:
+      - name: Check out Caller Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: caller-repo
+
       - name: Check out Homebrew Tap
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -52,27 +59,34 @@ jobs:
         run: brew trust JacksonFergusonDev/tap
 
       - name: Update Formula
+        id: update
         run: |
-          # The input variables replace your hardcoded values
-          uv run tooling-repo/scripts/update_homebrew.py \
-            --version "${{ inputs.tag }}" \
-            --package "${{ inputs.package_name }}" \
-            --formula-path "./homebrew-tap/${{ inputs.formula_path }}"
+          ARGS=(--version "${{ inputs.tag }}" --caller-dir "caller-repo" --tap-dir "homebrew-tap")
+          if [ -n "${{ inputs.package_name }}" ]; then
+            ARGS+=(--package "${{ inputs.package_name }}")
+          fi
+          if [ -n "${{ inputs.formula_path }}" ]; then
+            ARGS+=(--formula-path "${{ inputs.formula_path }}")
+          fi
+          uv run tooling-repo/scripts/update_homebrew.py "${ARGS[@]}"
 
       - name: Commit and Push
         working-directory: homebrew-tap
         run: |
+          FORMULA_PATH="${{ steps.update.outputs.formula_path }}"
+          PACKAGE_NAME="${{ steps.update.outputs.package_name }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${{ inputs.formula_path }}"
+          git add "$FORMULA_PATH"
 
           if git diff --cached --quiet; then
             echo "No formula changes to commit."
             exit 0
           fi
 
-          cp "${{ inputs.formula_path }}" "$(brew --repository jacksonfergusondev/homebrew-tap)/Formula/"
+          cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/homebrew-tap)/Formula/"
 
-          brew audit --strict --online "jacksonfergusondev/homebrew-tap/${{ inputs.package_name }}"
-          git commit -m "chore: bump ${{ inputs.package_name }} to ${{ inputs.tag }} and sync python resources"
+          brew audit --strict --online "jacksonfergusondev/homebrew-tap/$PACKAGE_NAME"
+          git commit -m "chore: bump $PACKAGE_NAME to ${{ inputs.tag }} and sync python resources"
           git push

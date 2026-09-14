@@ -76,7 +76,7 @@ def test_main_missing_formula(mocker, tmp_path):
 
 
 def test_main_happy_path(mocker, tmp_path):
-    formula_path = tmp_path / "test_formula.rb"
+    formula_path = tmp_path / "testpkg.rb"
     formula_path.write_text("class Test < Formula\nend", encoding="utf-8")
 
     mocker.patch(
@@ -125,3 +125,109 @@ def test_main_happy_path(mocker, tmp_path):
     assert 'resource "dep" do' in args[3]
     assert 'url "dep_url"' in args[3]
     assert 'sha256 "dep_sha"' in args[3]
+
+
+def test_main_inferred_from_pyproject(mocker, tmp_path):
+    caller_dir = tmp_path / "caller_repo"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "my-tool"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+
+    tap_dir = tmp_path / "tap_repo"
+    formula_dir = tap_dir / "Formula"
+    formula_dir.mkdir(parents=True)
+    formula_path = formula_dir / "my-tool.rb"
+    formula_path.write_text("class MyTool < Formula\nend", encoding="utf-8")
+
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew.py",
+            "--version",
+            "0.1.0",
+            "--caller-dir",
+            str(caller_dir),
+            "--tap-dir",
+            str(tap_dir),
+        ],
+    )
+
+    mocker.patch(
+        "scripts.update_homebrew.get_pypi_metadata",
+        return_value={
+            "urls": [
+                {"packagetype": "sdist", "url": "url", "digests": {"sha256": "sha"}}
+            ]
+        },
+    )
+
+    def mock_run_cmd(args, cwd=None):
+        if "compile" in args:
+            output_file = Path(args[args.index("-o") + 1])
+            output_file.write_text("my-tool==0.1.0\n", encoding="utf-8")
+        return ""
+
+    mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
+    mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")
+
+    update_homebrew.main()
+
+    mock_splice.assert_called_once()
+    args, _ = mock_splice.call_args
+    assert args[0] == formula_path
+
+
+def test_main_package_mismatch_error(mocker, tmp_path):
+    caller_dir = tmp_path / "caller_repo"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "actual-package"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew.py",
+            "--version",
+            "0.1.0",
+            "--caller-dir",
+            str(caller_dir),
+            "--package",
+            "copy-pasted-package",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        update_homebrew.main()
+
+    err = str(exc_info.value)
+    assert "Package name mismatch!" in err
+    assert "Caller repository defines project: 'actual-package'" in err
+    assert "Workflow input 'package_name' was:  'copy-pasted-package'" in err
+    assert "You can remove 'package_name' from the workflow 'with:' block" in err
+
+
+def test_main_formula_stem_mismatch_error(mocker, tmp_path):
+    formula_path = tmp_path / "wrong-formula.rb"
+    formula_path.touch()
+
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew.py",
+            "--version",
+            "0.1.0",
+            "--formula-path",
+            str(formula_path),
+            "--package",
+            "my-package",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        update_homebrew.main()
+
+    err = str(exc_info.value)
+    assert "Formula path mismatch!" in err
+    assert "Expected project/package: 'my-package'" in err

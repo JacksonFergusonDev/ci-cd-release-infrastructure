@@ -19,10 +19,16 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .brew_utils import get_pypi_sdist, run_cmd, splice_formula
+    from .brew_utils import (
+        get_pypi_sdist,
+        resolve_and_validate_formula,
+        run_cmd,
+        splice_formula,
+    )
 except ImportError:
     from brew_utils import (  # type: ignore[import-not-found,no-redef]
         get_pypi_sdist,
+        resolve_and_validate_formula,
         run_cmd,
         splice_formula,
     )
@@ -68,25 +74,40 @@ def main() -> None:
     parser.add_argument(
         "--formula-path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the Ruby formula file.",
     )
     parser.add_argument(
         "--package",
-        default="protostar",
-        help="Target PyPI package name.",
+        default=None,
+        help="Target PyPI package name (optional, inferred from caller pyproject.toml).",
+    )
+    parser.add_argument(
+        "--caller-dir",
+        type=Path,
+        default=None,
+        help="Path to caller repository root.",
+    )
+    parser.add_argument(
+        "--tap-dir",
+        type=Path,
+        default=None,
+        help="Path to Homebrew tap repository root.",
     )
     args = parser.parse_args()
 
     # Strip 'v' prefix if present to ensure PyPI API compatibility
     args.version = args.version.lstrip("v")
 
-    formula_path: Path = args.formula_path.resolve()
-    if not formula_path.exists():
-        sys.exit(f"Error: Formula file not found at {formula_path}")
+    package_name, formula_path, _ = resolve_and_validate_formula(
+        caller_dir=args.caller_dir,
+        tap_dir=args.tap_dir,
+        formula_path=args.formula_path,
+        package_name=args.package,
+    )
 
     # 1. Wait for registry sync
-    metadata = get_pypi_metadata(args.package, args.version)
+    metadata = get_pypi_metadata(package_name, args.version)
 
     # 2. Extract root distribution vectors
     new_url, new_sha = extract_sdist_info(metadata)
@@ -98,7 +119,7 @@ def main() -> None:
         tmp_path = Path(tmp_dir)
         reqs_in = tmp_path / "reqs.in"
         reqs_txt = tmp_path / "reqs.txt"
-        reqs_in.write_text(f"{args.package}=={args.version}", encoding="utf-8")
+        reqs_in.write_text(f"{package_name}=={args.version}", encoding="utf-8")
 
         run_cmd(
             [
@@ -131,7 +152,7 @@ def main() -> None:
                     version = version.strip()
 
                     # Excise the root package to pass Homebrew audits
-                    if pkg.lower() == args.package.lower():
+                    if pkg.lower() == package_name.lower():
                         continue
 
                     print(f"  -> Fetching {pkg}=={version}")

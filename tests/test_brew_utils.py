@@ -99,3 +99,119 @@ def test_splice_formula(tmp_path):
     assert 'url "new_url"' in content
     assert 'sha256 "new_sha"' in content
     assert 'resource "dep" do' in content
+
+
+def test_get_caller_project_name_pep621(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "pep621-pkg"\n', encoding="utf-8"
+    )
+    assert brew_utils.get_caller_project_name(tmp_path) == "pep621-pkg"
+
+
+def test_get_caller_project_name_poetry(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.poetry]\nname = "poetry-pkg"\n', encoding="utf-8"
+    )
+    assert brew_utils.get_caller_project_name(tmp_path) == "poetry-pkg"
+
+
+def test_get_caller_project_name_flit(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.flit.metadata]\nmodule = "flit-pkg"\n', encoding="utf-8"
+    )
+    assert brew_utils.get_caller_project_name(tmp_path) == "flit-pkg"
+
+
+def test_get_caller_project_name_missing_or_invalid(tmp_path):
+    assert brew_utils.get_caller_project_name(tmp_path) is None
+
+    (tmp_path / "pyproject.toml").write_text("invalid [ toml", encoding="utf-8")
+    assert brew_utils.get_caller_project_name(tmp_path) is None
+
+
+def test_resolve_and_validate_formula_full_inference(tmp_path):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "my-cli"\n', encoding="utf-8"
+    )
+
+    tap_dir = tmp_path / "tap"
+    formula_dir = tap_dir / "Formula"
+    formula_dir.mkdir(parents=True)
+    formula_file = formula_dir / "my-cli.rb"
+    formula_file.touch()
+
+    pkg, formula, rel = brew_utils.resolve_and_validate_formula(
+        caller_dir=caller_dir,
+        tap_dir=tap_dir,
+    )
+
+    assert pkg == "my-cli"
+    assert formula == formula_file.resolve()
+    assert rel == "Formula/my-cli.rb"
+
+
+def test_resolve_and_validate_formula_package_mismatch(tmp_path):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "actual-cli"\n', encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        brew_utils.resolve_and_validate_formula(
+            caller_dir=caller_dir,
+            package_name="wrong-cli",
+        )
+
+    err = str(exc_info.value)
+    assert "Package name mismatch!" in err
+    assert "Caller repository defines project: 'actual-cli'" in err
+    assert "Workflow input 'package_name' was:  'wrong-cli'" in err
+
+
+def test_resolve_and_validate_formula_stem_mismatch(tmp_path):
+    formula_path = tmp_path / "other-cli.rb"
+    formula_path.touch()
+
+    with pytest.raises(SystemExit) as exc_info:
+        brew_utils.resolve_and_validate_formula(
+            formula_path=formula_path,
+            package_name="my-cli",
+        )
+
+    err = str(exc_info.value)
+    assert "Formula path mismatch!" in err
+    assert "Expected project/package: 'my-cli'" in err
+
+
+def test_resolve_and_validate_formula_could_not_determine(tmp_path):
+    caller_dir = tmp_path / "empty_caller"
+    caller_dir.mkdir()
+
+    with pytest.raises(SystemExit) as exc_info:
+        brew_utils.resolve_and_validate_formula(caller_dir=caller_dir)
+
+    assert "Could not determine package name!" in str(exc_info.value)
+
+
+def test_resolve_and_validate_formula_not_found(tmp_path):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    (caller_dir / "pyproject.toml").write_text(
+        '[project]\nname = "my-cli"\n', encoding="utf-8"
+    )
+
+    tap_dir = tmp_path / "tap"
+    tap_dir.mkdir()
+
+    with pytest.raises(SystemExit) as exc_info:
+        brew_utils.resolve_and_validate_formula(
+            caller_dir=caller_dir,
+            tap_dir=tap_dir,
+        )
+
+    err = str(exc_info.value)
+    assert "Formula not found" in err
+    assert "Formula/my-cli.rb" in err

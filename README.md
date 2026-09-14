@@ -54,8 +54,9 @@ jobs:
     uses: JacksonFergusonDev/ci-cd-tooling/.github/workflows/update-homebrew.yml@main
     with:
       tag: ${{ github.ref_name }}
-      package_name: "target-package"
-      formula_path: "Formula/target-package.rb"
+      # Optional: automatically inferred from pyproject.toml and defaulted to Formula/<package_name>.rb
+      # package_name: "target-package"
+      # formula_path: "Formula/target-package.rb"
     secrets:
       TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 ```
@@ -74,7 +75,8 @@ jobs:
     uses: JacksonFergusonDev/ci-cd-tooling/.github/workflows/update-homebrew-local.yml@main
     with:
       tag: ${{ github.ref_name }}
-      formula_path: "Formula/target-cli.rb"
+      # Optional: defaults to Formula/<package_name>.rb based on caller pyproject.toml
+      # formula_path: "Formula/target-cli.rb"
     secrets:
       TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 ```

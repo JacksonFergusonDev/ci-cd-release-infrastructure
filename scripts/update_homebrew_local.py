@@ -17,10 +17,16 @@ import urllib.request
 from pathlib import Path
 
 try:
-    from .brew_utils import get_pypi_sdist, run_cmd, splice_formula
+    from .brew_utils import (
+        get_pypi_sdist,
+        resolve_and_validate_formula,
+        run_cmd,
+        splice_formula,
+    )
 except ImportError:
     from brew_utils import (  # type: ignore[import-not-found,no-redef]
         get_pypi_sdist,
+        resolve_and_validate_formula,
         run_cmd,
         splice_formula,
     )
@@ -47,19 +53,28 @@ def main() -> None:
         "--repo", required=True, help="GitHub repository (e.g., owner/repo)"
     )
     parser.add_argument("--tag", required=True, help="Release tag (e.g., v0.1.0)")
-    parser.add_argument("--formula", type=Path, required=True, help="Path to formula")
+    parser.add_argument("--formula", type=Path, default=None, help="Path to formula")
     parser.add_argument(
         "--caller-dir", type=Path, required=True, help="Caller repo root"
     )
+    parser.add_argument(
+        "--tap-dir", type=Path, default=None, help="Homebrew tap directory"
+    )
+    parser.add_argument(
+        "--package", default=None, help="Target package name (optional)"
+    )
     args = parser.parse_args()
 
-    formula_path: Path = args.formula.resolve()
     caller_dir: Path = args.caller_dir.resolve()
-
-    if not formula_path.exists():
-        sys.exit(f"Formula not found: {formula_path}")
     if not caller_dir.exists():
         sys.exit(f"Caller directory not found: {caller_dir}")
+
+    package_name, formula_path, _ = resolve_and_validate_formula(
+        caller_dir=caller_dir,
+        tap_dir=args.tap_dir,
+        formula_path=args.formula,
+        package_name=args.package,
+    )
 
     # 1. Resolve Root URL and Hash
     tarball_url = f"https://github.com/{args.repo}/archive/refs/tags/{args.tag}.tar.gz"
@@ -103,6 +118,10 @@ def main() -> None:
                     pkg, version = line.split("==")
                     pkg = re.sub(r"\[.*\]", "", pkg).strip()
                     version = version.strip()
+
+                    # Excise the root package to pass Homebrew audits
+                    if pkg.lower() == package_name.lower():
+                        continue
 
                     print(f"  -> Fetching {pkg}=={version}")
                     sdist_url, sdist_sha = get_pypi_sdist(pkg, version)

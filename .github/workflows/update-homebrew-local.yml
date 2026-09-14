@@ -8,9 +8,10 @@ on:
         required: true
         type: string
       formula_path:
-        description: 'Relative path to the formula in the tap (e.g., Formula/focal.rb)'
-        required: true
+        description: 'Relative path to the formula in the tap (optional, defaults to Formula/<package_name>.rb)'
+        required: false
         type: string
+        default: ''
     secrets:
       TAP_GITHUB_TOKEN:
         required: true
@@ -53,30 +54,30 @@ jobs:
         run: brew trust JacksonFergusonDev/tap
 
       - name: Update Formula
+        id: update
         run: |
-          uv run tooling-repo/scripts/update_homebrew_local.py \
-            --repo "${{ github.repository }}" \
-            --tag "${{ inputs.tag }}" \
-            --formula "homebrew-tap/${{ inputs.formula_path }}" \
-            --caller-dir "caller-repo"
+          ARGS=(--repo "${{ github.repository }}" --tag "${{ inputs.tag }}" --caller-dir "caller-repo" --tap-dir "homebrew-tap")
+          if [ -n "${{ inputs.formula_path }}" ]; then
+            ARGS+=(--formula "${{ inputs.formula_path }}")
+          fi
+          uv run tooling-repo/scripts/update_homebrew_local.py "${ARGS[@]}"
 
       - name: Commit and Push
         working-directory: homebrew-tap
         run: |
+          FORMULA_PATH="${{ steps.update.outputs.formula_path }}"
+          PACKAGE_NAME="${{ steps.update.outputs.package_name }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${{ inputs.formula_path }}"
+          git add "$FORMULA_PATH"
 
           if git diff --cached --quiet; then
             echo "No formula changes to commit."
             exit 0
           fi
 
-          # Dynamically extract package name from formula path
-          FORMULA_FILENAME=$(basename "${{ inputs.formula_path }}")
-          PACKAGE_NAME="${FORMULA_FILENAME%.*}"
-
-          cp "${{ inputs.formula_path }}" "$(brew --repository jacksonfergusondev/homebrew-tap)/Formula/"
+          cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/homebrew-tap)/Formula/"
 
           brew audit --strict --online "jacksonfergusondev/homebrew-tap/$PACKAGE_NAME"
           git commit -m "chore: bump $PACKAGE_NAME to ${{ inputs.tag }} and sync python resources"
