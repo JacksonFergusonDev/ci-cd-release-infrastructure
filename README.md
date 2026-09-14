@@ -1,4 +1,4 @@
-<!-- markdownlint-disable-file MD041 -->
+<!-- rumdl-disable-file first-line-heading -->
 <div align="center">
 
 # CI/CD Tooling

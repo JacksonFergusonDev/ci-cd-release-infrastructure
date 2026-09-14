@@ -6,40 +6,41 @@ set quiet
 
 blue := '\033[1;34m'
 green := '\033[1;32m'
-yellow := '\033[1;33m'
 nc := '\033[0m'
 
 # Show available commands
 default:
     @just --list
 
-# Auto-format Python code
-format:
+# Sync/install dependencies using uv
+sync:
+    uv sync --quiet
+
+# Auto-format Python and Markdown
+format: sync
     @printf "\n{{ blue }}=== Formatting Code ==={{ nc }}\n"
     uv run ruff check --fix .
     uv run ruff format .
+    uv run rumdl fmt .
     @printf "{{ green }}✔ Formatting complete{{ nc }}\n"
 
-# Run all linters (Ruff and Markdown)
-lint:
+# Run linters and check formatting (Ruff and Markdown)
+lint: sync
     @printf "\n{{ blue }}=== Running Linters ==={{ nc }}\n"
     uv run ruff check .
     uv run ruff format --check .
-    if command -v markdownlint-cli2 >/dev/null 2>&1; then \
-        markdownlint-cli2 "**/*.md"; \
-    else \
-        printf "{{ yellow }}⚠ markdownlint-cli2 not found. Skipping.{{ nc }}\n"; \
-    fi
+    uv run rumdl check .
+    uv run rumdl fmt --check .
     @printf "{{ green }}✔ Linting passed{{ nc }}\n"
 
 # Run static type checking with Mypy
-typecheck:
+typecheck: sync
     @printf "\n{{ blue }}=== Running Type Checks ==={{ nc }}\n"
     uv run mypy .
     @printf "{{ green }}✔ Type checking passed{{ nc }}\n"
 
 # Run pytest
-test:
+test: sync
     @printf "\n{{ blue }}=== Running Tests ==={{ nc }}\n"
     uv run pytest
     @printf "{{ green }}✔ All tests passed{{ nc }}\n"

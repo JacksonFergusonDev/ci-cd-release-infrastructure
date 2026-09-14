@@ -1,50 +1,108 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+  - pre-push
+
+default_stages:
+  - pre-commit
+
+fail_fast: true
+
 repos:
   # Generic hooks (configured to IGNORE Python)
   - repo: builtin
     hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: check-executables-have-shebangs
       - id: trailing-whitespace
         exclude: \.py$
       - id: end-of-file-fixer
-        exclude: \.py$
+        exclude: \.py$|\.gitkeep$
       - id: check-yaml
-      - id: check-added-large-files
-      - id: check-merge-conflict
+      - id: check-json
       - id: check-toml
 
-  # Local Python Toolchain (Managed via uv.lock)
+  # Local Python + Markdown Toolchain (Managed via uv.lock)
   - repo: local
     hooks:
+      - id: uv-lock-check
+        name: uv lock check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+
       - id: ruff-check
         name: ruff check
         entry: uv run ruff check --fix
         language: system
         types: [python]
-        pass_filenames: false
+        exclude: ^docs/
+        require_serial: true
 
       - id: ruff-format
         name: ruff format
         entry: uv run ruff format
         language: system
         types: [python]
-        pass_filenames: false
+        exclude: ^docs/
+        require_serial: true
 
       - id: mypy
         name: mypy
-        entry: uv run mypy .
+        entry: uv run mypy
         language: system
         types: [python]
-        pass_filenames: false
+        exclude: ^docs/
+        require_serial: true
 
-  # Markdown linting
-  - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.23.2
+      - id: rumdl-check
+        name: rumdl check
+        entry: uv run rumdl check --fix
+        language: system
+        types: [markdown]
+        require_serial: true
+
+      - id: rumdl-fmt
+        name: rumdl fmt
+        entry: uv run rumdl fmt
+        language: system
+        types: [markdown]
+        require_serial: true
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+  # Check for accidental commits of secrets
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
     hooks:
-      - id: markdownlint-cli2
-        args: ["--fix"]
+      - id: gitleaks
+
+  # Commit message validation
+  - repo: https://github.com/Goldziher/gitfluff
+    rev: v0.8.0
+    hooks:
+      - id: gitfluff-lint
+        args: [--write]
+        stages: [commit-msg]
 
   # Renovate config validation
   - repo: https://github.com/renovatebot/pre-commit-hooks
-    rev: 44.35.1
+    rev: 44.83.1
     hooks:
       - id: renovate-config-validator
         files: '.github/renovate.json'
+
+  # GitHub Actions workflow validation
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint

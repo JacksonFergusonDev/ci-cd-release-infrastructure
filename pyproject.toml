@@ -3,12 +3,10 @@ name = "ci-cd-tooling"
 version = "0.1.0"
 description = "Centralized CI/CD infrastructure providing reusable GitHub Actions workflows and automated release tooling for Python packages and Homebrew taps."
 readme = "README.md"
-authors = [
-    { name = "Jackson Ferguson", email = "jackson.ferguson0@gmail.com" },
-]
-requires-python = ">=3.13"
-dependencies = []
-license = {file = "LICENSE"}
+authors = [{ name = "Jackson Ferguson", email = "jackson.ferguson0@gmail.com" }]
+requires-python = ">=3.14"
+dependencies = ["tomlkit>=0.15.1"]
+license = { file = "LICENSE" }
 
 [dependency-groups]
 dev = [
@@ -18,7 +16,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",
     "ruff>=0.15.12",
-    "tomlkit>=0.15.1",
+    "rumdl>=0.2.73",
 ]
 
 # ==================================================
@@ -27,45 +25,63 @@ dev = [
 
 # ---- ruff ---- #
 
-[tool.ruff]
-target-version = "py313"
-extend-exclude = ["docs", "site"]
-
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "T20", "PT", "C4", "D", "RUF", "N", "RET"]
-ignore = [
-    "E501",
-    "D100",
-    "D104",
-    "D107",
-    "T201",
+select = [
+    "A",   # flake8-builtins
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "D",   # pydocstyle
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "PT",  # flake8-pytest
+    "RET", # flake8-return
+    "RUF", # Ruff-specific
+    "SIM", # flake8-simplify
+    "T20", # flake8-print
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
 ]
+ignore = ["D100", "D104", "D107", "E501", "S603", "S607"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["protostar"]
-section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+known-first-party = ["ci-cd-tooling"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["T201", "D"]
+"tests/*.py" = ["T201", "D", "S"]
+"scripts/*.py" = ["T201", "D", "S", "SIM"]
 
 # ---- mypy ---- #
 
 [tool.mypy]
-python_version = "3.13"
+strict = true
 pretty = true
 show_error_codes = true
 show_error_context = true
-warn_return_any = true
-warn_unused_configs = true
-check_untyped_defs = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+warn_return_any = false
 
 # ---- pytest ---- #
 
 [tool.pytest.ini_options]
-addopts = "--strict-markers --cov=scripts --cov-report=term-missing"
+addopts = "--strict-markers"
 testpaths = ["tests"]
 pythonpath = ["."]
 
@@ -74,5 +90,50 @@ source = ["scripts"]
 branch = true
 
 [tool.coverage.report]
+omit = ["scripts/**/__init__.py"]
 show_missing = true
 skip_covered = true
+fail_under = 85
+
+# ---- rumdl  ---- #
+
+[tool.rumdl]
+disable = [
+    "MD013", # line length - creates unnecessary diff churn
+    "MD033", # inline HTML – required for readme and parts of documentation
+    "MD077", # continuation line indentation – we intentionally use 4 spaces for visual clarity
+]
+
+# --- Heading style ---
+# Enforce ATX style (# Heading) exclusively; setext (underlined) headings are not allowed
+[tool.rumdl.MD003]
+style = "atx"
+
+# --- Unordered list style ---
+# Use dash (-) for list markers – cleaner than * or +, and reduces git diff noise
+[tool.rumdl.MD004]
+style = "dash"
+
+# --- Trailing spaces ---
+# Allow exactly 2 spaces for hard line breaks (Markdown standard); flag any other stray whitespace
+[tool.rumdl.MD009]
+br-spaces = 2
+strict = false
+
+# --- Duplicate headings ---
+# Allow identical subheadings (e.g., "Parameters") as long as they appear under different parent headings
+[tool.rumdl.MD024]
+siblings-only = true
+
+# --- Ordered list numbering ---
+# Use "one" style (1., 1., 1.) so reordering list items doesn't create massive diff churn
+[tool.rumdl.MD029]
+style = "one"
+
+# --- Per‑directory overrides for docs/ ---
+# Relax rules that conflict with Zensical / Python‑Markdown extensions
+[tool.rumdl.per-file-ignores]
+"docs/**/*.md" = [
+    "MD041", # first line need not be a top‑level heading
+    "MD046", # code block style – Zensical extensions require mixing fenced and indented blocks for admonitions/tabs
+]
