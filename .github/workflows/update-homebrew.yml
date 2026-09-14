@@ -25,6 +25,8 @@ jobs:
   update-homebrew:
     name: Sync Formula & Python Resources
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
     steps:
       - name: Check out Caller Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -56,7 +58,7 @@ jobs:
         run: brew trust JacksonFergusonDev/tap
 
       - name: Tap the repository
-        run: brew tap JacksonFergusonDev/homebrew-tap ./homebrew-tap
+        run: brew tap JacksonFergusonDev/tap
 
       - name: Update Formula
         id: update
