@@ -3,7 +3,7 @@
 
 # CI/CD & Release Infrastructure
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JacksonFergusonDev/ci-cd-tooling/ci.yml?style=flat-square&color=white&labelColor=black&label=CI)](https://github.com/JacksonFergusonDev/ci-cd-tooling/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/JacksonFergusonDev/ci-cd-release-infrastructure/ci.yml?style=flat-square&color=white&labelColor=black&label=CI)](https://github.com/JacksonFergusonDev/ci-cd-release-infrastructure/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.14+-white?style=flat-square&color=white&labelColor=black)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/badge/style-ruff-white?style=flat-square&color=white&labelColor=black)](https://github.com/astral-sh/ruff)
 [![Mypy](https://img.shields.io/badge/mypy-checked-white?style=flat-square&color=white&labelColor=black)](https://mypy-lang.org/)
@@ -51,7 +51,7 @@ jobs:
   sync-homebrew:
     name: Delegate Homebrew Update
     needs: build-n-publish # Ensure PyPI publishing succeeds first
-    uses: JacksonFergusonDev/ci-cd-tooling/.github/workflows/update-homebrew.yml@main
+    uses: JacksonFergusonDev/ci-cd-release-infrastructure/.github/workflows/update-homebrew.yml@main
     with:
       tag: ${{ github.ref_name }}
       # Optional: automatically inferred from pyproject.toml and defaulted to Formula/<package_name>.rb
@@ -72,7 +72,7 @@ jobs:
   sync-homebrew-local:
     name: Sync Local Homebrew Formula
     needs: release
-    uses: JacksonFergusonDev/ci-cd-tooling/.github/workflows/update-homebrew-local.yml@main
+    uses: JacksonFergusonDev/ci-cd-release-infrastructure/.github/workflows/update-homebrew-local.yml@main
     with:
       tag: ${{ github.ref_name }}
       # Optional: defaults to Formula/<package_name>.rb based on caller pyproject.toml
@@ -123,5 +123,5 @@ A turnkey, atomic release orchestrator for uv-based Python projects. Executes a 
 ```just
 # Bump project version (part: major, minor, patch), sync lockfile, commit, tag, and atomic push
 bump part:
-    uv run --refresh https://raw.githubusercontent.com/JacksonFergusonDev/ci-cd-tooling/refs/heads/main/scripts/release.py {{ part }}
+    uv run --refresh https://raw.githubusercontent.com/JacksonFergusonDev/ci-cd-release-infrastructure/refs/heads/main/scripts/release.py {{ part }}
 ```

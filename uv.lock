@@ -45,7 +45,7 @@ wheels = [
 ]
 
 [[package]]
-name = "ci-cd-tooling"
+name = "ci-cd-release-infrastructure"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
