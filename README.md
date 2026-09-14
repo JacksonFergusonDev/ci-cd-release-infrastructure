@@ -1,10 +1,10 @@
 <!-- rumdl-disable-file first-line-heading -->
 <div align="center">
 
-# CI/CD Tooling
+# CI/CD & Release Infrastructure
 
 [![CI](https://img.shields.io/github/actions/workflow/status/JacksonFergusonDev/ci-cd-tooling/ci.yml?style=flat-square&color=white&labelColor=black&label=CI)](https://github.com/JacksonFergusonDev/ci-cd-tooling/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.13+-white?style=flat-square&color=white&labelColor=black)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14+-white?style=flat-square&color=white&labelColor=black)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/badge/style-ruff-white?style=flat-square&color=white&labelColor=black)](https://github.com/astral-sh/ruff)
 [![Mypy](https://img.shields.io/badge/mypy-checked-white?style=flat-square&color=white&labelColor=black)](https://mypy-lang.org/)
 [![prek](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/j178/prek/master/docs/assets/badge-v0.json&style=flat-square&color=white&labelColor=black)](https://github.com/j178/prek)
@@ -85,7 +85,9 @@ jobs:
 
 ## 📜 Automation Scripts & Remote Execution
 
-All scripts inside `scripts/` are standalone Python scripts featuring [PEP 723](https://peps.python.org/pep-0723/) inline metadata blocks. They can be executed directly via `uv run` without manually cloning this repository or installing dependencies locally.
+The repository provides release and deployment automation tools under `scripts/`. In particular, `release.py` is structured as a standalone script featuring a [PEP 723](https://peps.python.org/pep-0723/) inline metadata block so caller projects can execute it directly via `uv run` without cloning this repository or installing local dependencies.
+
+The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local.py`) are modular internal scripts backed by `brew_utils.py` and invoked automatically by the reusable GitHub Actions workflows.
 
 ### Atomic Release Orchestrator (`scripts/release.py`)
 
@@ -104,8 +106,17 @@ A turnkey, atomic release orchestrator for uv-based Python projects. Executes a 
    - Synchronizes `uv.lock` via `uv sync` and checks lock integrity (`uv lock --check`).
    - Stages and creates release commit.
    - Creates annotated tag.
-   - Atomically pushes branch and tag to remote (`git push origin HEAD --tags --atomic`).
+   - Atomically pushes branch and tag to remote (`git push origin HEAD --tags --atomic`), unless `--no-push` is specified.
    - Automatically rolls back (deletes tag, runs `git reset --hard`) if any step fails or is aborted via `Ctrl+C`.
+
+#### Flags & Options
+
+- `part` *(required)*: SemVer part to increment (`major`, `minor`, `patch`).
+- `--branch <name>`: Expected release branch (default: `main`).
+- `--remote <name>`: Git remote target (default: `origin`).
+- `--dry-run`: Validates pre-flight checks and previews the candidate version without mutating repository state.
+- `--no-push`: Commits and tags locally without pushing to the remote.
+- `--pre-flight <cmd>`: Shell command to execute during pre-flight checks (can be specified multiple times).
 
 #### Remote Usage in `justfile`
 
