@@ -208,9 +208,9 @@ def test_main_package_mismatch_error(mocker, tmp_path):
     assert "You can remove 'package_name' from the workflow 'with:' block" in err
 
 
-def test_main_formula_stem_mismatch_error(mocker, tmp_path):
-    formula_path = tmp_path / "wrong-formula.rb"
-    formula_path.touch()
+def test_main_custom_formula_path_success(mocker, tmp_path):
+    formula_path = tmp_path / "custom-name.rb"
+    formula_path.write_text("class CustomName < Formula\nend", encoding="utf-8")
 
     mocker.patch(
         "sys.argv",
@@ -225,9 +225,26 @@ def test_main_formula_stem_mismatch_error(mocker, tmp_path):
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        update_homebrew.main()
+    mocker.patch(
+        "scripts.update_homebrew.get_pypi_metadata",
+        return_value={
+            "urls": [
+                {"packagetype": "sdist", "url": "url", "digests": {"sha256": "sha"}}
+            ]
+        },
+    )
 
-    err = str(exc_info.value)
-    assert "Formula path mismatch!" in err
-    assert "Expected project/package: 'my-package'" in err
+    def mock_run_cmd(args, cwd=None):
+        if "compile" in args:
+            output_file = Path(args[args.index("-o") + 1])
+            output_file.write_text("my-package==0.1.0\n", encoding="utf-8")
+        return ""
+
+    mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
+    mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")
+
+    update_homebrew.main()
+
+    mock_splice.assert_called_once()
+    args, _ = mock_splice.call_args
+    assert args[0] == formula_path

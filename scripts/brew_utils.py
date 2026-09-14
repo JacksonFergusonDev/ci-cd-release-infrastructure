@@ -92,20 +92,6 @@ def resolve_and_validate_formula(
 
     # 2. Resolve formula path
     if formula_path:
-        formula_stem = formula_path.stem
-        expected_stem = caller_project_name or resolved_package
-        if formula_stem.lower() != expected_stem.lower():
-            sys.exit(
-                f"\n❌ [Configuration Error] Formula path mismatch!\n"
-                f"   Formula path stem is:   '{formula_stem}' ({formula_path})\n"
-                f"   Expected project/package: '{expected_stem}'\n\n"
-                f"Possible causes:\n"
-                f"1. An explicit 'formula_path' was configured in the workflow call (e.g., from an older\n"
-                f"   workflow template). You can remove 'formula_path' from the workflow 'with:' block to\n"
-                f"   default to 'Formula/{expected_stem}.rb'.\n"
-                f"2. The formula path input has a typo or points to the wrong formula.\n"
-            )
-
         # Check if formula_path is relative to tap_dir or standalone
         if not formula_path.exists() and tap_dir and (tap_dir / formula_path).exists():
             resolved_formula = (tap_dir / formula_path).resolve()
@@ -134,11 +120,13 @@ def resolve_and_validate_formula(
         )
 
     # 4. Export to GITHUB_OUTPUT if available
+    formula_name = resolved_formula.stem
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         try:
             with open(github_output, "a", encoding="utf-8") as f:
                 f.write(f"package_name={resolved_package}\n")
+                f.write(f"formula_name={formula_name}\n")
                 f.write(f"formula_path={rel_formula_path}\n")
         except Exception as e:
             print(f"Warning: Failed to write to GITHUB_OUTPUT: {e}", file=sys.stderr)

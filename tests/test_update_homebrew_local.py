@@ -194,18 +194,19 @@ def test_main_inferred_from_pyproject(mocker, tmp_path):
 
     output_content = output_file.read_text(encoding="utf-8")
     assert "package_name=focal\n" in output_content
+    assert "formula_name=focal\n" in output_content
     assert "formula_path=Formula/focal.rb\n" in output_content
 
 
-def test_main_formula_mismatch_with_pyproject(mocker, tmp_path):
+def test_main_custom_formula_path_with_pyproject(mocker, tmp_path):
     caller_dir = tmp_path / "caller"
     caller_dir.mkdir()
     (caller_dir / "pyproject.toml").write_text(
-        '[project]\nname = "focal"\nversion = "0.1.0"\n', encoding="utf-8"
+        '[project]\nname = "focal-cli"\nversion = "0.1.0"\n', encoding="utf-8"
     )
 
-    wrong_formula = tmp_path / "wrong-cli.rb"
-    wrong_formula.touch()
+    formula_path = tmp_path / "focal.rb"
+    formula_path.write_text("class Focal < Formula\nend", encoding="utf-8")
 
     mocker.patch(
         "sys.argv",
@@ -216,15 +217,21 @@ def test_main_formula_mismatch_with_pyproject(mocker, tmp_path):
             "--tag",
             "v0.1.0",
             "--formula",
-            str(wrong_formula),
+            str(formula_path),
             "--caller-dir",
             str(caller_dir),
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        update_homebrew_local.main()
+    mocker.patch("scripts.update_homebrew_local.get_sha256", return_value="sha_123")
 
-    err = str(exc_info.value)
-    assert "Formula path mismatch!" in err
-    assert "Expected project/package: 'focal'" in err
+    def mock_run_cmd(args, cwd=None):
+        if "-o" in args:
+            output_file = Path(args[args.index("-o") + 1])
+            output_file.write_text("", encoding="utf-8")
+        return ""
+
+    mocker.patch("scripts.update_homebrew_local.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts.update_homebrew_local.splice_formula")
+
+    update_homebrew_local.main()

@@ -171,19 +171,18 @@ def test_resolve_and_validate_formula_package_mismatch(tmp_path):
     assert "Workflow input 'package_name' was:  'wrong-cli'" in err
 
 
-def test_resolve_and_validate_formula_stem_mismatch(tmp_path):
+def test_resolve_and_validate_formula_custom_formula_path(tmp_path):
     formula_path = tmp_path / "other-cli.rb"
     formula_path.touch()
 
-    with pytest.raises(SystemExit) as exc_info:
-        brew_utils.resolve_and_validate_formula(
-            formula_path=formula_path,
-            package_name="my-cli",
-        )
+    pkg, formula, rel = brew_utils.resolve_and_validate_formula(
+        formula_path=formula_path,
+        package_name="my-cli",
+    )
 
-    err = str(exc_info.value)
-    assert "Formula path mismatch!" in err
-    assert "Expected project/package: 'my-cli'" in err
+    assert pkg == "my-cli"
+    assert formula == formula_path.resolve()
+    assert rel == str(formula_path)
 
 
 def test_resolve_and_validate_formula_could_not_determine(tmp_path):

@@ -76,7 +76,7 @@ jobs:
         working-directory: homebrew-tap
         run: |
           FORMULA_PATH="${{ steps.update.outputs.formula_path }}"
-          PACKAGE_NAME="${{ steps.update.outputs.package_name }}"
+          FORMULA_NAME="${{ steps.update.outputs.formula_name }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -87,8 +87,8 @@ jobs:
             exit 0
           fi
 
-          cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/homebrew-tap)/Formula/"
+          cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/tap)/Formula/"
 
-          brew audit --strict --online "jacksonfergusondev/homebrew-tap/$PACKAGE_NAME"
-          git commit -m "chore: bump $PACKAGE_NAME to ${{ inputs.tag }} and sync python resources"
+          brew audit --strict --online "jacksonfergusondev/tap/$FORMULA_NAME"
+          git commit -m "chore: bump $FORMULA_NAME to ${{ inputs.tag }} and sync python resources"
           git push
