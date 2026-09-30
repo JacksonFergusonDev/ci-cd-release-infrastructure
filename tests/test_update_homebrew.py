@@ -34,6 +34,34 @@ def test_get_pypi_metadata_timeout(mocker):
         update_homebrew.get_pypi_metadata("protostar", "0.1.0", max_retries=1, delay=0)
 
 
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError("handshake timed out"), urllib.error.URLError("connection reset")],
+)
+def test_get_pypi_metadata_retries_connection_failure(mocker, error):
+    sleep = mocker.patch("scripts.update_homebrew.time.sleep")
+    response = MagicMock()
+    response.__enter__.return_value.status = 200
+    response.__enter__.return_value.read.return_value = b'{"info": "test"}'
+    urlopen = mocker.patch("urllib.request.urlopen", side_effect=[error, response])
+    assert update_homebrew.get_pypi_metadata("pkg", "1.0", max_retries=2) == {
+        "info": "test"
+    }
+    assert urlopen.call_count == 2
+    sleep.assert_called_once_with(2)
+
+
+def test_get_pypi_metadata_connection_failure_is_bounded(mocker):
+    sleep = mocker.patch("scripts.update_homebrew.time.sleep")
+    urlopen = mocker.patch(
+        "urllib.request.urlopen", side_effect=TimeoutError("timeout")
+    )
+    with pytest.raises(TimeoutError, match="Timed out waiting"):
+        update_homebrew.get_pypi_metadata("pkg", "1.0", max_retries=3)
+    assert urlopen.call_count == 3
+    assert sleep.call_count == 2
+
+
 def test_extract_sdist_info_success():
     metadata = {
         "urls": [

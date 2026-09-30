@@ -41,17 +41,22 @@ def get_pypi_metadata(
     url = f"https://pypi.org/pypi/{package_name}/{version}/json"
     print(f"Polling {url} for release visibility...")
 
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(url, timeout=15) as response:
                 if response.status == 200:
                     data = response.read().decode("utf-8")
                     return json.loads(data)  # type: ignore[no-any-return]
         except urllib.error.HTTPError as e:
+            if e.code != 404 and e.code != 429 and e.code < 500:
+                raise
             if e.code != 404:
                 print(f"HTTP Error querying PyPI: {e.code}", file=sys.stderr)
+        except (urllib.error.URLError, TimeoutError) as e:
+            print(f"Connection error querying PyPI: {e}", file=sys.stderr)
 
-        time.sleep(delay)
+        if attempt + 1 < max_retries:
+            time.sleep(delay)
 
     raise TimeoutError(f"Timed out waiting for {package_name} {version} on PyPI.")
 

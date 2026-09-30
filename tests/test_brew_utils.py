@@ -36,11 +36,51 @@ def test_get_pypi_sdist(mocker):
 
 
 def test_get_pypi_sdist_http_error(mocker):
+    sleep = mocker.patch("scripts.brew_utils.time.sleep")
     mock_urlopen = mocker.patch("urllib.request.urlopen")
     mock_urlopen.side_effect = urllib.error.URLError("Not found")
 
     with pytest.raises(SystemExit, match="Failed to fetch PyPI metadata"):
         brew_utils.get_pypi_sdist("markdownify", "0.11.0")
+    assert mock_urlopen.call_count == 4
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 4]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError("handshake timed out"), urllib.error.URLError("connection reset")],
+)
+def test_get_pypi_sdist_recovers_after_connection_failure(mocker, error):
+    sleep = mocker.patch("scripts.brew_utils.time.sleep")
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = json.dumps(
+        {
+            "urls": [
+                {"packagetype": "sdist", "url": "sdist", "digests": {"sha256": "sha"}}
+            ]
+        }
+    ).encode()
+    urlopen = mocker.patch("urllib.request.urlopen", side_effect=[error, response])
+    assert brew_utils.get_pypi_sdist("pkg", "1.0") == ("sdist", "sha")
+    assert urlopen.call_count == 2
+    sleep.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize(
+    ("status", "attempts"), [(404, 1), (403, 1), (429, 4), (503, 4)]
+)
+def test_get_pypi_sdist_http_retry_policy(mocker, status, attempts):
+    from email.message import Message
+
+    sleep = mocker.patch("scripts.brew_utils.time.sleep")
+    urlopen = mocker.patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.HTTPError("url", status, "error", Message(), None),
+    )
+    with pytest.raises(SystemExit, match="Failed to fetch PyPI metadata"):
+        brew_utils.get_pypi_sdist("pkg", "1.0")
+    assert urlopen.call_count == attempts
+    assert sleep.call_count == attempts - 1
 
 
 def test_get_pypi_sdist_missing(mocker):

@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -138,11 +139,24 @@ def get_pypi_sdist(package: str, version: str) -> tuple[str, str]:
     """Queries PyPI for the sdist URL and SHA256 of a specific dependency."""
     url = f"https://pypi.org/pypi/{package}/{version}/json"
     req = urllib.request.Request(url)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        sys.exit(f"Failed to fetch PyPI metadata for {package}=={version}: {e}")
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            break
+        except (urllib.error.URLError, TimeoutError) as e:
+            permanent = isinstance(e, urllib.error.HTTPError) and (
+                e.code != 429 and e.code < 500
+            )
+            if permanent or attempt == 3:
+                sys.exit(f"Failed to fetch PyPI metadata for {package}=={version}: {e}")
+            delay = 2**attempt
+            print(
+                f"PyPI request for {package}=={version} failed: {e}. "
+                f"Retrying in {delay}s (attempt {attempt + 2}/4)...",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
     for info in data.get("urls", []):
         if info.get("packagetype") == "sdist":
