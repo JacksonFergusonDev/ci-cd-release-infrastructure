@@ -8,6 +8,9 @@ requires-python = ">=3.14"
 dependencies = ["tomlkit>=0.15.1"]
 license = { file = "LICENSE" }
 
+[project.urls]
+Author = "https://jacksonferguson.me"
+
 [dependency-groups]
 dev = [
     "mypy>=2.0.0",
