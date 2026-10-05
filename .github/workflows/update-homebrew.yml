@@ -52,7 +52,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # main
+        uses: Homebrew/actions/setup-homebrew@dc7099b3e807f1e2ecc61f3ecabc840eedd5586a # main
 
       - name: Trust the tap
         run: brew trust JacksonFergusonDev/tap
