@@ -87,7 +87,7 @@ jobs:
 
 The repository provides release and deployment automation tools under `scripts/`. In particular, `release.py` is structured as a standalone script featuring a [PEP 723](https://peps.python.org/pep-0723/) inline metadata block so caller projects can execute it directly via `uv run` without cloning this repository or installing local dependencies.
 
-The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local.py`) are modular internal scripts backed by `_brew_utils.py` and invoked automatically by the reusable GitHub Actions workflows.
+The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local.py`) are modular internal scripts backed by `_brew_utils.py` and invoked automatically by the reusable GitHub Actions workflows. They detect `GITHUB_ACTIONS=true` to emit collapsible log groups, warning/error annotations, and a job summary with the package, release, formula path, and resource count. Local runs use plain status prefixes. Progress messages are flushed immediately; job summaries describe formula generation, with audit and push handled by subsequent workflow steps.
 
 ### Atomic Release Orchestrator (`scripts/release.py`)
 

@@ -10,7 +10,6 @@ from PyPI, and splices the formula using specified sentinels.
 import argparse
 import json
 import re
-import sys
 import tempfile
 import time
 import urllib.error
@@ -21,16 +20,24 @@ from typing import Any
 try:
     from ._brew_utils import (
         get_pypi_sdist,
+        log,
+        log_group,
         resolve_and_validate_formula,
         run_cmd,
+        run_logged,
         splice_formula,
+        write_summary,
     )
 except ImportError:
     from _brew_utils import (  # type: ignore[import-not-found,no-redef]
         get_pypi_sdist,
+        log,
+        log_group,
         resolve_and_validate_formula,
         run_cmd,
+        run_logged,
         splice_formula,
+        write_summary,
     )
 
 
@@ -39,23 +46,33 @@ def get_pypi_metadata(
 ) -> dict[str, Any]:
     """Poll PyPI until the specified package version metadata becomes available."""
     url = f"https://pypi.org/pypi/{package_name}/{version}/json"
-    print(f"Polling {url} for release visibility...")
+    log(f"Polling {url} for release visibility...")
 
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(url, timeout=15) as response:
                 if response.status == 200:
                     data = response.read().decode("utf-8")
+                    log(
+                        f"Release metadata available (attempt {attempt + 1}/{max_retries})."
+                    )
                     return json.loads(data)  # type: ignore[no-any-return]
         except urllib.error.HTTPError as e:
             if e.code != 404 and e.code != 429 and e.code < 500:
                 raise
             if e.code != 404:
-                print(f"HTTP Error querying PyPI: {e.code}", file=sys.stderr)
+                log(
+                    f"PyPI returned HTTP {e.code} (attempt {attempt + 1}/{max_retries})."
+                )
         except (urllib.error.URLError, TimeoutError) as e:
-            print(f"Connection error querying PyPI: {e}", file=sys.stderr)
+            log(
+                f"Connection error querying PyPI: {e} (attempt {attempt + 1}/{max_retries})."
+            )
 
         if attempt + 1 < max_retries:
+            log(
+                f"Release not available yet; retrying in {delay}s (attempt {attempt + 2}/{max_retries})."
+            )
             time.sleep(delay)
 
     raise TimeoutError(f"Timed out waiting for {package_name} {version} on PyPI.")
@@ -104,80 +121,95 @@ def main() -> None:
     # Strip 'v' prefix if present to ensure PyPI API compatibility
     args.version = args.version.lstrip("v")
 
-    package_name, formula_path, _ = resolve_and_validate_formula(
-        caller_dir=args.caller_dir,
-        tap_dir=args.tap_dir,
-        formula_path=args.formula_path,
-        package_name=args.package,
-    )
-
-    # 1. Wait for registry sync
-    metadata = get_pypi_metadata(package_name, args.version)
-
-    # 2. Extract root distribution vectors
-    new_url, new_sha = extract_sdist_info(metadata)
-    print(f"Resolved root sdist:\n  URL: {new_url}\n  SHA: {new_sha}")
-
-    # 3. Resolve the dependency tree via uv pip compile
-    print("Resolving dependency tree...")
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        reqs_in = tmp_path / "reqs.in"
-        reqs_txt = tmp_path / "reqs.txt"
-        reqs_in.write_text(f"{package_name}=={args.version}", encoding="utf-8")
-
-        run_cmd(
-            [
-                "uv",
-                "pip",
-                "compile",
-                "--no-annotate",
-                "--no-header",
-                str(reqs_in),
-                "-o",
-                str(reqs_txt),
-            ]
+    with log_group("1/4 Validate formula configuration"):
+        package_name, formula_path, relative_formula = resolve_and_validate_formula(
+            caller_dir=args.caller_dir,
+            tap_dir=args.tap_dir,
+            formula_path=args.formula_path,
+            package_name=args.package,
         )
 
-        # 4. Parse requirements and query PyPI directly
-        print("Resolving PyPI resource blocks...")
-        resource_blocks = []
+    log(
+        f"Package: {package_name} | Release: {args.version} | Formula: {relative_formula}"
+    )
 
-        with open(reqs_txt, encoding="utf-8") as f:
-            for line in f:
-                # Strip environment markers (e.g., ; python_version >= '3.9')
-                line = line.split(";")[0].strip()
+    with log_group("2/4 Fetch release metadata"):
+        # 1. Wait for registry sync
+        metadata = get_pypi_metadata(package_name, args.version)
 
-                if not line or line.startswith("#") or line.startswith("-"):
-                    continue
+        # 2. Extract root distribution vectors
+        new_url, new_sha = extract_sdist_info(metadata)
+        log(f"Resolved root sdist:\n  URL: {new_url}\n  SHA: {new_sha}")
 
-                if "==" in line:
-                    pkg, version = line.split("==")
-                    pkg = re.sub(r"\[.*\]", "", pkg).strip()
-                    version = version.strip()
+    with log_group("3/4 Resolve Python resources"):
+        # 3. Resolve the dependency tree via uv pip compile
+        log("Resolving dependency tree...")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            reqs_in = tmp_path / "reqs.in"
+            reqs_txt = tmp_path / "reqs.txt"
+            reqs_in.write_text(f"{package_name}=={args.version}", encoding="utf-8")
 
-                    # Excise the root package to pass Homebrew audits
-                    if pkg.lower() == package_name.lower():
+            run_cmd(
+                [
+                    "uv",
+                    "pip",
+                    "compile",
+                    "--no-annotate",
+                    "--no-header",
+                    str(reqs_in),
+                    "-o",
+                    str(reqs_txt),
+                ]
+            )
+
+            # 4. Parse requirements and query PyPI directly
+            log("Resolving PyPI resource blocks...")
+            resource_blocks: list[str] = []
+
+            with open(reqs_txt, encoding="utf-8") as f:
+                for line in f:
+                    # Strip environment markers (e.g., ; python_version >= '3.9')
+                    line = line.split(";")[0].strip()
+
+                    if not line or line.startswith("#") or line.startswith("-"):
                         continue
 
-                    print(f"  -> Fetching {pkg}=={version}")
-                    sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
+                    if "==" in line:
+                        pkg, version = line.split("==")
+                        pkg = re.sub(r"\[.*\]", "", pkg).strip()
+                        version = version.strip()
 
-                    block = (
-                        f'  resource "{pkg}" do\n'
-                        f'    url "{sdist_url}"\n'
-                        f'    sha256 "{sdist_sha}"\n'
-                        f"  end"
-                    )
-                    resource_blocks.append(block)
+                        # Excise the root package to pass Homebrew audits
+                        if pkg.lower() == package_name.lower():
+                            continue
 
-        resource_text = "\n\n".join(resource_blocks)
+                        log(
+                            f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}"
+                        )
+                        sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
 
-    # 5. Splice File Content
-    splice_formula(formula_path, new_url, new_sha, resource_text)
+                        block = (
+                            f'  resource "{pkg}" do\n'
+                            f'    url "{sdist_url}"\n'
+                            f'    sha256 "{sdist_sha}"\n'
+                            f"  end"
+                        )
+                        resource_blocks.append(block)
 
-    print("Successfully synchronized formula.")
+            resource_text = "\n\n".join(resource_blocks)
+
+    with log_group("4/4 Update formula"):
+        # 5. Splice File Content
+        splice_formula(formula_path, new_url, new_sha, resource_text)
+
+    log(
+        f"Updated {relative_formula} for {package_name} {args.version} "
+        f"with {len(resource_blocks)} Python resources.",
+        level="success",
+    )
+    write_summary(package_name, args.version, relative_formula, len(resource_blocks))
 
 
 if __name__ == "__main__":
-    main()
+    run_logged(main)

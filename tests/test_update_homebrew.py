@@ -103,7 +103,10 @@ def test_main_missing_formula(mocker, tmp_path):
         update_homebrew.main()
 
 
-def test_main_happy_path(mocker, tmp_path):
+def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     formula_path = tmp_path / "testpkg.rb"
     formula_path.write_text("class Test < Formula\nend", encoding="utf-8")
 
@@ -144,6 +147,14 @@ def test_main_happy_path(mocker, tmp_path):
     mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")
 
     update_homebrew.main()
+
+    output = capsys.readouterr().out
+    assert output.count("::group::") == 4
+    assert output.count("::endgroup::") == 4
+    assert "Resource 1: Fetching" in output
+    assert "[success] Updated" in output
+    assert "with 1 Python resources." in output
+    assert "| Python resources | 1 |" in summary.read_text()
 
     mock_splice.assert_called_once()
     args, _ = mock_splice.call_args

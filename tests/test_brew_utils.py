@@ -254,3 +254,94 @@ def test_resolve_and_validate_formula_not_found(tmp_path):
     err = str(exc_info.value)
     assert "Formula not found" in err
     assert "Formula/my-cli.rb" in err
+
+
+@pytest.mark.parametrize("github", ["true", "false"])
+def test_log_annotations_escape_command_data(monkeypatch, capsys, github):
+    monkeypatch.setenv("GITHUB_ACTIONS", github)
+    _brew_utils.log("Request 50% failed\r\n::error::extra", level="warning")
+    output = capsys.readouterr()
+    if github == "true":
+        assert output.out == "::warning::Request 50%25 failed%0D%0A::error::extra\n"
+        assert output.err == ""
+    else:
+        assert output.out == ""
+        assert output.err.startswith("[warning] Request 50% failed")
+        assert "\n::error::" not in output.err
+
+
+@pytest.mark.parametrize("github", ["true", "false"])
+def test_log_group_closes_on_failure(monkeypatch, capsys, github):
+    monkeypatch.setenv("GITHUB_ACTIONS", github)
+    with (
+        pytest.raises(ValueError, match="failed"),
+        _brew_utils.log_group("Fetch release"),
+    ):
+        raise ValueError("failed")
+    output = capsys.readouterr().out
+    if github == "true":
+        assert output == "::group::Fetch release\n::endgroup::\n"
+    else:
+        assert output == "\n[phase]   Fetch release\n"
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        (SystemExit("Missing formula"), 1, "Missing formula"),
+        (TimeoutError("PyPI timeout"), 1, "PyPI timeout"),
+        (KeyboardInterrupt(), 130, "interrupted"),
+        (SystemExit(2), 2, "status 2"),
+    ],
+)
+def test_run_logged_reports_failure(monkeypatch, capsys, error, code, message):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def fail():
+        with _brew_utils.log_group("Update"):
+            raise error
+
+    with pytest.raises(SystemExit) as exc:
+        _brew_utils.run_logged(fail)
+    assert exc.value.code == code
+    output = capsys.readouterr().out
+    assert output.index("::endgroup::") < output.index("::error::")
+    assert message in output
+
+
+def test_run_logged_help_is_not_an_error(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def help_exit():
+        raise SystemExit(0)
+
+    with pytest.raises(SystemExit) as exc:
+        _brew_utils.run_logged(help_exit)
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("github", ["true", "false"])
+def test_write_summary_appends_only_in_actions(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("GITHUB_ACTIONS", github)
+    summary = tmp_path / "summary.md"
+    summary.write_text("Existing summary\n")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    _brew_utils.write_summary("pkg|<name>", "v1.0.0", "Formula/pkg.rb", 3)
+    content = summary.read_text()
+    assert content.startswith("Existing summary\n")
+    if github == "true":
+        assert "pkg&#124;&lt;name&gt;" in content
+        assert "v1.0.0" in content
+        assert "Formula/pkg.rb" in content
+        assert "| Python resources | 3 |" in content
+        assert "Audit, commit, and push run in a later step." in content
+    else:
+        assert content == "Existing summary\n"
+
+
+def test_write_summary_failure_is_nonfatal(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "missing" / "summary.md"))
+    _brew_utils.write_summary("pkg", "1.0", "pkg.rb", 0)
+    assert "::warning::Could not write job summary" in capsys.readouterr().out

@@ -7,7 +7,98 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from html import escape
 from pathlib import Path
+from typing import Literal
+
+
+def _github_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def _escape_command(message: str) -> str:
+    """Escape workflow command data so messages cannot introduce commands."""
+    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def log(
+    message: str,
+    *,
+    level: Literal["info", "success", "warning", "error"] = "info",
+) -> None:
+    """Emit readable status messages or GitHub warning/error annotations."""
+    if _github_actions() and level in {"warning", "error"}:
+        print(f"::{level}::{_escape_command(message)}", flush=True)
+        return
+    stream = sys.stderr if level in {"warning", "error"} else sys.stdout
+    label = f"[{level}]"
+    message = message.replace("\n", "\n          ")
+    print(f"{label:<9} {message}", file=stream, flush=True)
+
+
+@contextmanager
+def log_group(title: str) -> Iterator[None]:
+    """Group runner logs and always close the group, including on failure."""
+    github = _github_actions()
+    if github:
+        print(f"::group::{_escape_command(title)}", flush=True)
+    else:
+        print(f"\n[phase]   {title}", flush=True)
+    try:
+        yield
+    finally:
+        if github:
+            print("::endgroup::", flush=True)
+
+
+def write_summary(
+    package: str, version: str, formula: str, resource_count: int
+) -> None:
+    """Append a formula update summary without implying audit or push success."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not _github_actions() or not summary_path:
+        return
+
+    def cell(value: str) -> str:
+        return (
+            escape(value).replace("|", "&#124;").replace("\r", " ").replace("\n", " ")
+        )
+
+    summary = (
+        "### Homebrew formula updated\n\n"
+        "| Field | Value |\n| --- | --- |\n"
+        f"| Package | <code>{cell(package)}</code> |\n"
+        f"| Release | <code>{cell(version)}</code> |\n"
+        f"| Formula | <code>{cell(formula)}</code> |\n"
+        f"| Python resources | {resource_count} |\n\n"
+        "Formula generation completed. Audit, commit, and push run in a later step.\n\n"
+    )
+    try:
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write(summary)
+    except OSError as e:
+        log(f"Could not write job summary: {e}", level="warning")
+
+
+def run_logged(main: Callable[[], None]) -> None:
+    """Report expected CLI failures as annotations while retaining exit codes."""
+    try:
+        main()
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            log(e.code.strip(), level="error")
+            raise SystemExit(1) from None
+        if e.code:
+            log(f"Formula update exited with status {e.code}.", level="error")
+        raise
+    except KeyboardInterrupt:
+        log("Formula update interrupted.", level="error")
+        raise SystemExit(130) from None
+    except Exception as e:
+        log(f"Formula update failed: {e}", level="error")
+        raise SystemExit(1) from None
 
 
 def get_caller_project_name(caller_dir: Path) -> str | None:
@@ -31,7 +122,7 @@ def get_caller_project_name(caller_dir: Path) -> str | None:
             if flit_name:
                 return str(flit_name)
     except Exception as e:
-        print(f"Warning: Failed to parse {pyproject_path}: {e}", file=sys.stderr)
+        log(f"Failed to parse {pyproject_path}: {e}", level="warning")
     return None
 
 
@@ -130,7 +221,7 @@ def resolve_and_validate_formula(
                 f.write(f"formula_name={formula_name}\n")
                 f.write(f"formula_path={rel_formula_path}\n")
         except Exception as e:
-            print(f"Warning: Failed to write to GITHUB_OUTPUT: {e}", file=sys.stderr)
+            log(f"Failed to write to GITHUB_OUTPUT: {e}", level="warning")
 
     return resolved_package, resolved_formula, rel_formula_path
 
@@ -151,10 +242,9 @@ def get_pypi_sdist(package: str, version: str) -> tuple[str, str]:
             if permanent or attempt == 3:
                 sys.exit(f"Failed to fetch PyPI metadata for {package}=={version}: {e}")
             delay = 2**attempt
-            print(
+            log(
                 f"PyPI request for {package}=={version} failed: {e}. "
-                f"Retrying in {delay}s (attempt {attempt + 2}/4)...",
-                file=sys.stderr,
+                f"Retrying in {delay}s (attempt {attempt + 2}/4)."
             )
             time.sleep(delay)
 
@@ -171,9 +261,9 @@ def run_cmd(args: list[str], cwd: Path | None = None) -> str:
         res = subprocess.run(args, capture_output=True, text=True, check=True, cwd=cwd)
         return res.stdout
     except subprocess.CalledProcessError as e:
-        print(f"Command failed: {' '.join(args)}", file=sys.stderr)
-        print(f"Stdout: {e.stdout}", file=sys.stderr)
-        print(f"Stderr: {e.stderr}", file=sys.stderr)
+        print(f"Command failed: {' '.join(args)}", file=sys.stderr, flush=True)
+        print(f"Stdout: {e.stdout}", file=sys.stderr, flush=True)
+        print(f"Stderr: {e.stderr}", file=sys.stderr, flush=True)
         raise
 
 
