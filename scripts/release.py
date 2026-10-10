@@ -24,6 +24,7 @@ import sys
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import TextIO
 
 import tomlkit
 
@@ -31,6 +32,41 @@ SEMVER_RE = re.compile(
     r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
+
+
+_OUTPUT_COLORS = {
+    "phase": "1;36",
+    "info": "36",
+    "success": "32",
+    "warning": "33",
+    "error": "31",
+}
+
+
+def _styled(text: str, code: str, stream: TextIO) -> str:
+    """Apply ANSI color only to a capable terminal, respecting NO_COLOR."""
+    if (
+        not stream.isatty()
+        or "NO_COLOR" in os.environ
+        or os.environ.get("TERM") == "dumb"
+    ):
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _output(
+    message: str,
+    *,
+    prefix: str = "info",
+    stderr: bool = False,
+    blank: bool = False,
+) -> None:
+    """Print a consistent status prefix, with color based on its destination."""
+    stream = sys.stderr if stderr else sys.stdout
+    label = f"[{prefix}]"
+    label = _styled(f"{label:<9}", _OUTPUT_COLORS.get(prefix, "36"), stream)
+    message = message.replace("\n", "\n          ")
+    print(f"{'\n' if blank else ''}{label} {message}", file=stream, flush=True)
 
 
 def get_clean_env() -> dict[str, str]:
@@ -152,38 +188,46 @@ def main(argv: list[str] | None = None) -> None:
     # --------------------------------------------------
     # Phase 1: Pre-Flight Checks (Strictly Read-Only)
     # --------------------------------------------------
-    print("=== [Pre-Flight 1/6] Checking tool prerequisites ===")
+    _output("Pre-flight checks", prefix="phase", blank=True)
+    _output(f"Branch: {args.branch} | Remote: {args.remote}")
+    _output("Checking tool prerequisites", prefix="1/6")
     for tool in ("git", "uv"):
         if not shutil.which(tool):
-            print(f"Error: Required tool '{tool}' not found in PATH.", file=sys.stderr)
+            _output(
+                f"Required tool '{tool}' not found in PATH.",
+                prefix="error",
+                stderr=True,
+            )
             sys.exit(1)
 
-    print("=== [Pre-Flight 2/6] Verifying release branch ===")
+    _output("Verifying release branch", prefix="2/6")
     try:
         branch_res = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"])
         current_branch = branch_res.stdout.strip()
     except subprocess.CalledProcessError:
-        print("Error: Failed to determine current git branch.", file=sys.stderr)
+        _output("Failed to determine current git branch.", prefix="error", stderr=True)
         sys.exit(1)
 
     if current_branch != args.branch:
-        print(
-            f"Error: Releases must be cut from '{args.branch}' branch (currently on '{current_branch}').",
-            file=sys.stderr,
+        _output(
+            f"Releases must be cut from '{args.branch}' branch (currently on '{current_branch}').",
+            prefix="error",
+            stderr=True,
         )
         sys.exit(1)
 
-    print("=== [Pre-Flight 3/6] Checking for uncommitted or untracked changes ===")
+    _output("Checking for uncommitted or untracked changes", prefix="3/6")
     status_res = run_cmd(["git", "status", "--porcelain"])
     if status_res.stdout.strip():
-        print(
-            "Error: Working directory is dirty. Please commit, stash, or clean all changes first:\n",
-            file=sys.stderr,
+        _output(
+            "Working directory is dirty. Please commit, stash, or clean all changes first:",
+            prefix="error",
+            stderr=True,
         )
         sys.stderr.write(status_res.stdout)
         sys.exit(1)
 
-    print("=== [Pre-Flight 4/6] Checking synchronization with remote ===")
+    _output("Checking synchronization with remote", prefix="4/6")
     try:
         run_cmd(["git", "fetch", args.remote, args.branch, "--tags", "--quiet"])
         local_hash = run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip()
@@ -191,25 +235,31 @@ def main(argv: list[str] | None = None) -> None:
             ["git", "rev-parse", f"{args.remote}/{args.branch}"]
         ).stdout.strip()
     except subprocess.CalledProcessError as e:
-        print(
-            f"Error: Failed to check remote synchronization with '{args.remote}/{args.branch}': {e}",
-            file=sys.stderr,
+        _output(
+            f"Failed to check remote synchronization with '{args.remote}/{args.branch}': {e}",
+            prefix="error",
+            stderr=True,
         )
         sys.exit(1)
 
     if local_hash != remote_hash:
-        print(
-            f"Error: Local branch '{args.branch}' ({local_hash[:8]}) does not match "
+        _output(
+            f"Local branch '{args.branch}' ({local_hash[:8]}) does not match "
             f"'{args.remote}/{args.branch}' ({remote_hash[:8]}).\n"
             "Please pull or push changes before releasing.",
-            file=sys.stderr,
+            prefix="error",
+            stderr=True,
         )
         sys.exit(1)
 
-    print("=== [Pre-Flight 5/6] Validating pyproject.toml & SemVer ===")
+    _output("Validating pyproject.toml & SemVer", prefix="5/6")
     pyproject_path = Path("pyproject.toml")
     if not pyproject_path.exists():
-        print("Error: pyproject.toml not found in working directory.", file=sys.stderr)
+        _output(
+            "pyproject.toml not found in working directory.",
+            prefix="error",
+            stderr=True,
+        )
         sys.exit(1)
 
     try:
@@ -218,54 +268,61 @@ def main(argv: list[str] | None = None) -> None:
         current_version = str(doc["project"]["version"])
         new_version = compute_bumped_version(current_version, args.part)
     except Exception as e:
-        print(
-            f"Error reading or calculating version from pyproject.toml: {e}",
-            file=sys.stderr,
+        _output(
+            f"Failed to read or calculate version from pyproject.toml: {e}",
+            prefix="error",
+            stderr=True,
         )
         sys.exit(1)
 
     new_tag = f"v{new_version}"
-    print(f"Current version: {current_version}")
-    print(f"Candidate release version: {new_version} (tag: {new_tag})")
+    _output(f"Current version: {current_version}")
+    _output(f"Candidate release version: {new_version} (tag: {new_tag})")
 
-    print("=== [Pre-Flight 6/6] Checking for tag collisions ===")
+    _output("Checking for tag collisions", prefix="6/6")
     local_tag_check = run_cmd(["git", "tag", "-l", new_tag]).stdout.strip()
     if local_tag_check:
-        print(f"Error: Tag '{new_tag}' already exists locally.", file=sys.stderr)
+        _output(f"Tag '{new_tag}' already exists locally.", prefix="error", stderr=True)
         sys.exit(1)
 
     remote_tag_check = run_cmd(
         ["git", "ls-remote", "--tags", args.remote, new_tag]
     ).stdout.strip()
     if remote_tag_check:
-        print(
-            f"Error: Tag '{new_tag}' already exists on remote '{args.remote}'.",
-            file=sys.stderr,
+        _output(
+            f"Tag '{new_tag}' already exists on remote '{args.remote}'.",
+            prefix="error",
+            stderr=True,
         )
         sys.exit(1)
 
     # Run optional custom pre-flight commands
     for cmd in args.pre_flight_cmds:
-        print(f"=== Running pre-flight command: {cmd} ===")
+        _output(f"Running pre-flight command: {cmd}")
         try:
             subprocess.run(cmd, shell=True, check=True, env=get_clean_env())
         except subprocess.CalledProcessError as e:
-            print(
-                f"Error: Pre-flight command '{cmd}' failed with code {e.returncode}.",
-                file=sys.stderr,
+            _output(
+                f"Pre-flight command '{cmd}' failed with code {e.returncode}.",
+                prefix="error",
+                stderr=True,
             )
             sys.exit(1)
 
     if args.dry_run:
-        print(
-            f"\n✔ Pre-flight checks passed successfully. Candidate version is {new_version} (dry-run)."
+        _output(
+            f"Pre-flight checks passed successfully. Candidate version is {new_version} (dry-run).",
+            prefix="success",
+            blank=True,
         )
         return
 
     # --------------------------------------------------
     # Phase 2: Transactional Execution & Rollback Guard
     # --------------------------------------------------
-    print(f"\n=== Executing release mutations for {new_tag} ===")
+    _output("Pre-flight checks passed successfully.", prefix="success")
+    _output(f"Executing release {new_tag}", prefix="phase", blank=True)
+    _output(f"Version: {current_version} -> {new_version}")
     initial_rev = local_hash
 
     tag_created = False
@@ -273,9 +330,11 @@ def main(argv: list[str] | None = None) -> None:
     files_mutated = False
 
     def rollback() -> None:
-        print(
-            "\n⚠ Release failed mid-flight! Rolling back local mutations...",
-            file=sys.stderr,
+        _output(
+            "Release failed mid-flight! Rolling back local mutations...",
+            prefix="warning",
+            stderr=True,
+            blank=True,
         )
         if tag_created:
             run_cmd(["git", "tag", "-d", new_tag], check=False)
@@ -283,54 +342,66 @@ def main(argv: list[str] | None = None) -> None:
             run_cmd(["git", "reset", "--hard", initial_rev], check=False)
         elif files_mutated:
             run_cmd(["git", "checkout", "--", "pyproject.toml", "uv.lock"], check=False)
-        print(
-            f"✔ Rollback complete. Repository cleanly restored to {initial_rev[:8]}.",
-            file=sys.stderr,
+        _output(
+            f"Rollback complete. Repository cleanly restored to {initial_rev[:8]}.",
+            prefix="success",
+            stderr=True,
         )
 
     try:
         # 1. Mutate pyproject.toml
-        print(f"Updating pyproject.toml to version {new_version}...")
+        _output(f"Updating pyproject.toml to version {new_version}", prefix="1/5")
         doc["project"]["version"] = new_version
         atomic_write_text(pyproject_path, tomlkit.dumps(doc))
         files_mutated = True
 
         # 2. Synchronize lockfile
-        print("Updating lockfile via uv sync...")
+        _output("Updating lockfile via uv sync", prefix="2/5")
         run_cmd(["uv", "sync"], capture=False)
         run_cmd(["uv", "lock", "--check"], capture=False)
 
         # 3. Stage and commit
-        print(f"Creating release commit for {new_version}...")
+        _output(f"Creating release commit for {new_version}", prefix="3/5")
         run_cmd(["git", "add", "pyproject.toml", "uv.lock"])
         run_cmd(["git", "commit", "-m", f"chore: bump version to {new_version}"])
         commit_created = True
 
         # 4. Create annotated tag
-        print(f"Creating annotated tag {new_tag}...")
+        _output(f"Creating annotated tag {new_tag}", prefix="4/5")
         run_cmd(["git", "tag", "-a", new_tag, "-m", f"Bump version to {new_tag}"])
         tag_created = True
 
         # 5. Push atomically to remote
         if not args.no_push:
-            print(f"Atomically shipping commit and {new_tag} to {args.remote}...")
+            _output(
+                f"Atomically pushing commit and {new_tag} to {args.remote}",
+                prefix="5/5",
+            )
             run_cmd(
                 ["git", "push", args.remote, "HEAD", "--tags", "--atomic"],
                 capture=False,
             )
         else:
-            print(
-                f"Skipping push (--no-push flag active). Local tag {new_tag} created."
+            _output(
+                f"Skipping push (--no-push). Local tag {new_tag} created.",
+                prefix="5/5",
             )
 
-        print(f"\n✔ Successfully released {new_tag}!")
+        if args.no_push:
+            _output(
+                f"Release {new_tag} created locally; push skipped.",
+                prefix="success",
+                blank=True,
+            )
+        else:
+            _output(f"Successfully released {new_tag}!", prefix="success", blank=True)
 
     except (KeyboardInterrupt, Exception) as e:
         rollback()
         if isinstance(e, KeyboardInterrupt):
-            print("Release aborted by user.", file=sys.stderr)
+            _output("Release aborted by user.", prefix="error", stderr=True)
             sys.exit(130)
-        print(f"Release failed: {e}", file=sys.stderr)
+        _output(f"Release failed: {e}", prefix="error", stderr=True)
         sys.exit(1)
 
 

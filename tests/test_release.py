@@ -1,10 +1,55 @@
 import subprocess
+import sys
+from io import StringIO
 from pathlib import Path
 
 import pytest
 import tomlkit
 
 from scripts import release
+
+
+@pytest.mark.parametrize(
+    ("stdout_tty", "stderr_tty", "stderr", "no_color", "term", "colored"),
+    [
+        (True, False, False, None, "xterm-256color", True),
+        (False, True, False, None, "xterm-256color", False),
+        (False, True, True, None, "xterm-256color", True),
+        (True, False, True, None, "xterm-256color", False),
+        (True, True, False, "", "xterm-256color", False),
+        (True, True, True, "1", "xterm-256color", False),
+        (True, True, False, None, "dumb", False),
+        (True, True, True, None, "dumb", False),
+    ],
+)
+def test_output_color_uses_destination_and_environment(
+    monkeypatch, stdout_tty, stderr_tty, stderr, no_color, term, colored
+) -> None:
+    stdout = StringIO()
+    stderr_stream = StringIO()
+    monkeypatch.setattr(stdout, "isatty", lambda: stdout_tty)
+    monkeypatch.setattr(stderr_stream, "isatty", lambda: stderr_tty)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr_stream)
+    monkeypatch.setenv("TERM", term)
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+
+    prefix = "error" if stderr else "success"
+    release._output("Release status", prefix=prefix, stderr=stderr)
+
+    destination = stderr_stream if stderr else stdout
+    other = stdout if stderr else stderr_stream
+    output = destination.getvalue()
+    assert ("\033[" in output) is colored
+    if colored:
+        assert "\033[31m" in output if stderr else "\033[32m" in output
+        assert "\033[0m" in output
+    assert f"[{prefix}]" in output
+    assert output.endswith(" Release status\n")
+    assert other.getvalue() == ""
 
 
 def test_atomic_write_text(tmp_path: Path) -> None:
@@ -166,6 +211,10 @@ def test_main_dry_run_success(mock_release_env: Path, mocker, capsys) -> None:
     out = capsys.readouterr().out
     assert "Candidate release version: 1.1.0 (tag: v1.1.0)" in out
     assert "Pre-flight checks passed successfully" in out
+    assert "[phase]   Pre-flight checks\n" in out
+    assert "[1/6]     Checking tool prerequisites\n" in out
+    assert "\n\n[success]" in out
+    assert "\033[" not in out
 
     # Verify no file mutations
     doc = tomlkit.parse(mock_release_env.read_text(encoding="utf-8"))
@@ -209,6 +258,11 @@ def test_main_full_release_no_push(mock_release_env: Path, mocker, capsys) -> No
         "Bump version to v1.1.0",
     ] in executed_cmds
     assert not any("push" in cmd for cmd in executed_cmds)
+    out = capsys.readouterr().out
+    assert "\n\n[phase]   Executing release v1.1.0\n" in out
+    assert "[5/5]     Skipping push" in out
+    assert "[success] Release v1.1.0 created locally; push skipped." in out
+    assert "\033[" not in out
 
 
 def test_main_rollback_on_failure(mock_release_env: Path, mocker, capsys) -> None:

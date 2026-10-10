@@ -91,6 +91,8 @@ The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local
 
 ### Atomic Release Orchestrator (`scripts/release.py`)
 
+Output uses numbered steps, aligned status prefixes, and color when writing to a terminal. Redirected output stays plain text; set `NO_COLOR` to disable color. Errors and rollback messages are written to stderr.
+
 A turnkey, atomic release orchestrator for uv-based Python projects. Executes a two-phase workflow:
 
 1. **Phase 1: Pre-Flight Checks (Read-Only)**
