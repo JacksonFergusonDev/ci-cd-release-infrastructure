@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from scripts import brew_utils
+from scripts import _brew_utils
 
 
 def test_get_pypi_sdist(mocker):
@@ -29,19 +29,19 @@ def test_get_pypi_sdist(mocker):
     mock_urlopen = mocker.patch("urllib.request.urlopen")
     mock_urlopen.return_value.__enter__.return_value = mock_response
 
-    url, sha = brew_utils.get_pypi_sdist("markdownify", "0.11.0")
+    url, sha = _brew_utils.get_pypi_sdist("markdownify", "0.11.0")
 
     assert url == "https://sdist-url.tar.gz"
     assert sha == "abc12345"
 
 
 def test_get_pypi_sdist_http_error(mocker):
-    sleep = mocker.patch("scripts.brew_utils.time.sleep")
+    sleep = mocker.patch("scripts._brew_utils.time.sleep")
     mock_urlopen = mocker.patch("urllib.request.urlopen")
     mock_urlopen.side_effect = urllib.error.URLError("Not found")
 
     with pytest.raises(SystemExit, match="Failed to fetch PyPI metadata"):
-        brew_utils.get_pypi_sdist("markdownify", "0.11.0")
+        _brew_utils.get_pypi_sdist("markdownify", "0.11.0")
     assert mock_urlopen.call_count == 4
     assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 4]
 
@@ -51,7 +51,7 @@ def test_get_pypi_sdist_http_error(mocker):
     [TimeoutError("handshake timed out"), urllib.error.URLError("connection reset")],
 )
 def test_get_pypi_sdist_recovers_after_connection_failure(mocker, error):
-    sleep = mocker.patch("scripts.brew_utils.time.sleep")
+    sleep = mocker.patch("scripts._brew_utils.time.sleep")
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps(
         {
@@ -61,7 +61,7 @@ def test_get_pypi_sdist_recovers_after_connection_failure(mocker, error):
         }
     ).encode()
     urlopen = mocker.patch("urllib.request.urlopen", side_effect=[error, response])
-    assert brew_utils.get_pypi_sdist("pkg", "1.0") == ("sdist", "sha")
+    assert _brew_utils.get_pypi_sdist("pkg", "1.0") == ("sdist", "sha")
     assert urlopen.call_count == 2
     sleep.assert_called_once_with(1)
 
@@ -72,13 +72,13 @@ def test_get_pypi_sdist_recovers_after_connection_failure(mocker, error):
 def test_get_pypi_sdist_http_retry_policy(mocker, status, attempts):
     from email.message import Message
 
-    sleep = mocker.patch("scripts.brew_utils.time.sleep")
+    sleep = mocker.patch("scripts._brew_utils.time.sleep")
     urlopen = mocker.patch(
         "urllib.request.urlopen",
         side_effect=urllib.error.HTTPError("url", status, "error", Message(), None),
     )
     with pytest.raises(SystemExit, match="Failed to fetch PyPI metadata"):
-        brew_utils.get_pypi_sdist("pkg", "1.0")
+        _brew_utils.get_pypi_sdist("pkg", "1.0")
     assert urlopen.call_count == attempts
     assert sleep.call_count == attempts - 1
 
@@ -92,14 +92,14 @@ def test_get_pypi_sdist_missing(mocker):
     mock_urlopen.return_value.__enter__.return_value = mock_response
 
     with pytest.raises(SystemExit, match="No sdist found"):
-        brew_utils.get_pypi_sdist("markdownify", "0.11.0")
+        _brew_utils.get_pypi_sdist("markdownify", "0.11.0")
 
 
 def test_run_cmd_success(mocker):
     mock_run = mocker.patch("subprocess.run")
     mock_run.return_value = MagicMock(stdout="success output\n")
 
-    result = brew_utils.run_cmd(["echo", "hello"])
+    result = _brew_utils.run_cmd(["echo", "hello"])
     assert result == "success output\n"
     mock_run.assert_called_once_with(
         ["echo", "hello"], capture_output=True, text=True, check=True, cwd=None
@@ -113,7 +113,7 @@ def test_run_cmd_failure(mocker, capsys):
     )
 
     with pytest.raises(subprocess.CalledProcessError):
-        brew_utils.run_cmd(["false"])
+        _brew_utils.run_cmd(["false"])
 
     captured = capsys.readouterr()
     assert "Command failed: false" in captured.err
@@ -128,7 +128,7 @@ def test_splice_formula(tmp_path):
         encoding="utf-8",
     )
 
-    brew_utils.splice_formula(
+    _brew_utils.splice_formula(
         formula_path,
         "new_url",
         "new_sha",
@@ -145,28 +145,28 @@ def test_get_caller_project_name_pep621(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "pep621-pkg"\n', encoding="utf-8"
     )
-    assert brew_utils.get_caller_project_name(tmp_path) == "pep621-pkg"
+    assert _brew_utils.get_caller_project_name(tmp_path) == "pep621-pkg"
 
 
 def test_get_caller_project_name_poetry(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[tool.poetry]\nname = "poetry-pkg"\n', encoding="utf-8"
     )
-    assert brew_utils.get_caller_project_name(tmp_path) == "poetry-pkg"
+    assert _brew_utils.get_caller_project_name(tmp_path) == "poetry-pkg"
 
 
 def test_get_caller_project_name_flit(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[tool.flit.metadata]\nmodule = "flit-pkg"\n', encoding="utf-8"
     )
-    assert brew_utils.get_caller_project_name(tmp_path) == "flit-pkg"
+    assert _brew_utils.get_caller_project_name(tmp_path) == "flit-pkg"
 
 
 def test_get_caller_project_name_missing_or_invalid(tmp_path):
-    assert brew_utils.get_caller_project_name(tmp_path) is None
+    assert _brew_utils.get_caller_project_name(tmp_path) is None
 
     (tmp_path / "pyproject.toml").write_text("invalid [ toml", encoding="utf-8")
-    assert brew_utils.get_caller_project_name(tmp_path) is None
+    assert _brew_utils.get_caller_project_name(tmp_path) is None
 
 
 def test_resolve_and_validate_formula_full_inference(tmp_path):
@@ -182,7 +182,7 @@ def test_resolve_and_validate_formula_full_inference(tmp_path):
     formula_file = formula_dir / "my-cli.rb"
     formula_file.touch()
 
-    pkg, formula, rel = brew_utils.resolve_and_validate_formula(
+    pkg, formula, rel = _brew_utils.resolve_and_validate_formula(
         caller_dir=caller_dir,
         tap_dir=tap_dir,
     )
@@ -200,7 +200,7 @@ def test_resolve_and_validate_formula_package_mismatch(tmp_path):
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        brew_utils.resolve_and_validate_formula(
+        _brew_utils.resolve_and_validate_formula(
             caller_dir=caller_dir,
             package_name="wrong-cli",
         )
@@ -215,7 +215,7 @@ def test_resolve_and_validate_formula_custom_formula_path(tmp_path):
     formula_path = tmp_path / "other-cli.rb"
     formula_path.touch()
 
-    pkg, formula, rel = brew_utils.resolve_and_validate_formula(
+    pkg, formula, rel = _brew_utils.resolve_and_validate_formula(
         formula_path=formula_path,
         package_name="my-cli",
     )
@@ -230,7 +230,7 @@ def test_resolve_and_validate_formula_could_not_determine(tmp_path):
     caller_dir.mkdir()
 
     with pytest.raises(SystemExit) as exc_info:
-        brew_utils.resolve_and_validate_formula(caller_dir=caller_dir)
+        _brew_utils.resolve_and_validate_formula(caller_dir=caller_dir)
 
     assert "Could not determine package name!" in str(exc_info.value)
 
@@ -246,7 +246,7 @@ def test_resolve_and_validate_formula_not_found(tmp_path):
     tap_dir.mkdir()
 
     with pytest.raises(SystemExit) as exc_info:
-        brew_utils.resolve_and_validate_formula(
+        _brew_utils.resolve_and_validate_formula(
             caller_dir=caller_dir,
             tap_dir=tap_dir,
         )

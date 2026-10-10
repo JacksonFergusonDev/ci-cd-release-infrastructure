@@ -19,14 +19,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .brew_utils import (
+    from ._brew_utils import (
         get_pypi_sdist,
         resolve_and_validate_formula,
         run_cmd,
         splice_formula,
     )
 except ImportError:
-    from brew_utils import (  # type: ignore[import-not-found,no-redef]
+    from _brew_utils import (  # type: ignore[import-not-found,no-redef]
         get_pypi_sdist,
         resolve_and_validate_formula,
         run_cmd,

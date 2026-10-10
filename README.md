@@ -25,7 +25,7 @@ Centralized infrastructure repository for reusable GitHub Actions workflows and 
 │   ├── update-homebrew.yml        # Reusable workflow for PyPI-published packages
 │   └── update-homebrew-local.yml  # Reusable workflow using caller repository manifests
 ├── scripts/
-│   ├── brew_utils.py              # Shared PyPI querying and Homebrew splicing logic
+│   ├── _brew_utils.py             # Shared PyPI querying and Homebrew splicing logic
 │   ├── release.py                 # Turnkey atomic release orchestrator
 │   ├── update_homebrew.py         # PyPI polling & Homebrew formula dependency splicing
 │   └── update_homebrew_local.py   # Manifest-based Homebrew formula dependency splicing
@@ -87,7 +87,7 @@ jobs:
 
 The repository provides release and deployment automation tools under `scripts/`. In particular, `release.py` is structured as a standalone script featuring a [PEP 723](https://peps.python.org/pep-0723/) inline metadata block so caller projects can execute it directly via `uv run` without cloning this repository or installing local dependencies.
 
-The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local.py`) are modular internal scripts backed by `brew_utils.py` and invoked automatically by the reusable GitHub Actions workflows.
+The Homebrew tap update scripts (`update_homebrew.py` and `update_homebrew_local.py`) are modular internal scripts backed by `_brew_utils.py` and invoked automatically by the reusable GitHub Actions workflows.
 
 ### Atomic Release Orchestrator (`scripts/release.py`)
 
