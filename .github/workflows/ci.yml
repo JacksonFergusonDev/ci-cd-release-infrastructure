@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Type Check
@@ -13,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Install uv
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -34,6 +39,11 @@ jobs:
 
     - name: Check Markdown formatting with rumdl
       run: uv run rumdl fmt --check --output-format github .
+
+    - name: Audit GitHub Actions workflows with zizmor
+      env:
+        GH_TOKEN: ${{ github.token }} # enables zizmor's online audits
+      run: uv run zizmor --format github .github/workflows
 
     - name: Type check with Mypy
       run: uv run mypy .
