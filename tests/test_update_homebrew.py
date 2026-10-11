@@ -141,7 +141,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
 
     mocker.patch(
-        "scripts.update_homebrew.get_pypi_sdist", return_value=("dep_url", "dep_sha")
+        "scripts._brew_utils.get_pypi_sdist", return_value=("dep_url", "dep_sha")
     )
 
     mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")

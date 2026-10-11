@@ -62,9 +62,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     def mock_get_pypi_sdist(pkg, version):
         return f"https://pypi.org/{pkg}.tar.gz", f"sha_{pkg}"
 
-    mocker.patch(
-        "scripts.update_homebrew_local.get_pypi_sdist", side_effect=mock_get_pypi_sdist
-    )
+    mocker.patch("scripts._brew_utils.get_pypi_sdist", side_effect=mock_get_pypi_sdist)
 
     def mock_run_cmd(args, cwd=None):
         if "export" in args:

@@ -9,7 +9,6 @@ those resources into the formula using specified sentinels.
 
 import argparse
 import hashlib
-import re
 import sys
 import tempfile
 import urllib.error
@@ -18,7 +17,7 @@ from pathlib import Path
 
 try:
     from ._brew_utils import (
-        get_pypi_sdist,
+        build_resource_blocks,
         log,
         log_group,
         resolve_and_validate_formula,
@@ -29,7 +28,7 @@ try:
     )
 except ImportError:
     from _brew_utils import (  # type: ignore[import-not-found,no-redef]
-        get_pypi_sdist,
+        build_resource_blocks,
         log,
         log_group,
         resolve_and_validate_formula,
@@ -117,40 +116,9 @@ def main() -> None:
                 cwd=caller_dir,
             )
 
-            # 3. Parse requirements and query PyPI directly (Bypassing poet entirely)
+            # 3. Parse requirements and query PyPI directly
             log("Resolving PyPI resource blocks...")
-            resource_blocks: list[str] = []
-
-            with open(reqs_file, encoding="utf-8") as f:
-                for line in f:
-                    # Strip environment markers (e.g., ; python_version >= '3.9')
-                    line = line.split(";")[0].strip()
-
-                    # Skip comments and flags
-                    if not line or line.startswith("#") or line.startswith("-"):
-                        continue
-
-                    if "==" in line:
-                        pkg, version = line.split("==")
-                        pkg = re.sub(r"\[.*\]", "", pkg).strip()
-                        version = version.strip()
-
-                        # Excise the root package to pass Homebrew audits
-                        if pkg.lower() == package_name.lower():
-                            continue
-
-                        log(
-                            f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}"
-                        )
-                        sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
-
-                        block = (
-                            f'  resource "{pkg}" do\n'
-                            f'    url "{sdist_url}"\n'
-                            f'    sha256 "{sdist_sha}"\n'
-                            f"  end"
-                        )
-                        resource_blocks.append(block)
+            resource_blocks = build_resource_blocks(reqs_file, package_name)
 
             resource_text = "\n\n".join(resource_blocks)
 

@@ -141,6 +141,46 @@ def test_splice_formula(tmp_path):
     assert 'resource "dep" do' in content
 
 
+def test_build_resource_blocks_parses_pinned_requirements(mocker, tmp_path):
+    reqs = tmp_path / "reqs.txt"
+    reqs.write_text(
+        "# comment\n"
+        "-e .\n"
+        "\n"
+        "target==1.0.0\n"
+        "requests[socks]==2.32.3 ; python_version >= '3.8'\n"
+        "idna==3.10\n"
+        "pkg @ git+https://example.com/pkg\n",
+        encoding="utf-8",
+    )
+    sdist = mocker.patch(
+        "scripts._brew_utils.get_pypi_sdist",
+        side_effect=lambda pkg, version: (f"{pkg}-{version}.tar.gz", f"sha_{pkg}"),
+    )
+
+    blocks = _brew_utils.build_resource_blocks(reqs, "Target")
+
+    assert [c.args for c in sdist.call_args_list] == [
+        ("requests", "2.32.3"),
+        ("idna", "3.10"),
+    ]
+    assert blocks == [
+        '  resource "requests" do\n    url "requests-2.32.3.tar.gz"\n    sha256 "sha_requests"\n  end',
+        '  resource "idna" do\n    url "idna-3.10.tar.gz"\n    sha256 "sha_idna"\n  end',
+    ]
+
+
+def test_find_sdist():
+    assert _brew_utils.find_sdist({"urls": [{"packagetype": "bdist_wheel"}]}) is None
+    assert _brew_utils.find_sdist(
+        {
+            "urls": [
+                {"packagetype": "sdist", "url": "u", "digests": {"sha256": "s"}},
+            ]
+        }
+    ) == ("u", "s")
+
+
 def test_get_caller_project_name_pep621(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "pep621-pkg"\n', encoding="utf-8"
