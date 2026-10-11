@@ -33,6 +33,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
         "class TestCLI < Formula\n"
         '  url "old_url"\n'
         '  sha256 "old_sha"\n'
+        '  depends_on "python@3.13"\n'
         "  # RESOURCE_BLOCK_START\n"
         "  # RESOURCE_BLOCK_END\n"
         "end",
@@ -65,13 +66,25 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     mocker.patch("scripts._brew_utils.get_pypi_sdist", side_effect=mock_get_pypi_sdist)
 
     def mock_run_cmd(args, cwd=None):
+        output_file = Path(args[args.index("-o") + 1])
         if "export" in args:
             # Fail instead of silently re-resolving a stale caller lockfile
             assert "--locked" in args
-            output_file = Path(args[args.index("-o") + 1])
+            assert "--no-emit-project" in args
+            # uv export is universal: one pin per marker fork
             output_file.write_text(
-                "markdownify==0.11.0 ; python_version >= '3.8'\nbeautifulsoup4==4.12.3",
+                "markdownify==0.11.0 ; python_version >= '3.8'\n"
+                "beautifulsoup4==4.12.3\n"
+                "colorama==0.4.6 ; sys_platform == 'win32'\n",
                 encoding="utf-8",
+            )
+        elif "compile" in args:
+            # Locked pins are filtered for the formula's target, not re-resolved
+            assert "--no-deps" in args
+            assert args[args.index("--python-platform") + 1] == "aarch64-apple-darwin"
+            assert args[args.index("--python-version") + 1] == "3.13"
+            output_file.write_text(
+                "markdownify==0.11.0\nbeautifulsoup4==4.12.3\n", encoding="utf-8"
             )
         return ""
 

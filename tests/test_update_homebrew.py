@@ -107,8 +107,10 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    formula_path = tmp_path / "testpkg.rb"
-    formula_path.write_text("class Test < Formula\nend", encoding="utf-8")
+    formula_path = tmp_path / "test_pkg.rb"
+    formula_path.write_text(
+        'class Test < Formula\n  depends_on "python@3.13"\nend', encoding="utf-8"
+    )
 
     mocker.patch(
         "sys.argv",
@@ -119,7 +121,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
             "--formula-path",
             str(formula_path),
             "--package",
-            "testpkg",
+            "test_pkg",
         ],
     )
 
@@ -134,8 +136,11 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
 
     def mock_run_cmd(args, cwd=None):
         if "compile" in args:
+            assert args[args.index("--python-platform") + 1] == "aarch64-apple-darwin"
+            assert args[args.index("--python-version") + 1] == "3.13"
             output_file = Path(args[args.index("-o") + 1])
-            output_file.write_text("dep==1.0.0\ntestpkg==0.1.0\n", encoding="utf-8")
+            # uv normalizes names: the root `test_pkg` is emitted as `test-pkg`
+            output_file.write_text("dep==1.0.0\ntest-pkg==0.1.0\n", encoding="utf-8")
         return ""
 
     mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)

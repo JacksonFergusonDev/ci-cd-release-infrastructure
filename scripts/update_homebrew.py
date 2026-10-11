@@ -26,6 +26,7 @@ try:
         run_cmd,
         run_logged,
         splice_formula,
+        target_resolution_args,
         write_summary,
     )
 except ImportError:
@@ -38,6 +39,7 @@ except ImportError:
         run_cmd,
         run_logged,
         splice_formula,
+        target_resolution_args,
         write_summary,
     )
 
@@ -157,6 +159,7 @@ def main() -> None:
                     "compile",
                     "--no-annotate",
                     "--no-header",
+                    *target_resolution_args(formula_path),
                     str(reqs_in),
                     "-o",
                     str(reqs_txt),
