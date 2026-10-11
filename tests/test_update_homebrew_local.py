@@ -68,6 +68,8 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
 
     def mock_run_cmd(args, cwd=None):
         if "export" in args:
+            # Fail instead of silently re-resolving a stale caller lockfile
+            assert "--locked" in args
             output_file = Path(args[args.index("-o") + 1])
             output_file.write_text(
                 "markdownify==0.11.0 ; python_version >= '3.8'\nbeautifulsoup4==4.12.3",

@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ''
+      dry_run:
+        description: 'Run every step including brew audit, but skip the commit and push to the tap'
+        required: false
+        type: boolean
+        default: false
     secrets:
       TAP_GITHUB_TOKEN:
         required: true
@@ -28,8 +33,6 @@ jobs:
   update-homebrew:
     name: Sync Formula & Python Resources
     runs-on: ubuntu-latest
-    env:
-      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
     steps:
       - name: Check out Caller Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,16 +51,16 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          enable-cache: true
           python-version: "3.14"
 
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # 2026.09.28.1
 
-      - name: Trust the tap
-        run: brew trust JacksonFergusonDev/tap
-
-      - name: Tap the repository
-        run: brew tap JacksonFergusonDev/tap
+      - name: Tap and trust the checked-out tap
+        run: |
+          brew tap JacksonFergusonDev/tap ./homebrew-tap
+          brew trust JacksonFergusonDev/tap
 
       - name: Update Formula
         id: update
@@ -69,10 +72,22 @@ jobs:
           caller_dir: caller-repo
           tap_dir: homebrew-tap
 
+      - name: Audit Formula
+        env:
+          FORMULA_PATH: ${{ steps.update.outputs.formula_path }}
+          FORMULA_NAME: ${{ steps.update.outputs.formula_name }}
+        run: |
+          # `brew tap` cloned the checkout; audit the updated file from Homebrew's copy.
+          TAPPED_FORMULA="$(brew --repository JacksonFergusonDev/tap)/$FORMULA_PATH"
+          mkdir -p "$(dirname "$TAPPED_FORMULA")"
+          cp "homebrew-tap/$FORMULA_PATH" "$TAPPED_FORMULA"
+          brew audit --strict --online "JacksonFergusonDev/tap/$FORMULA_NAME"
+
       - name: Commit and Push
         working-directory: homebrew-tap
         env:
           TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
           FORMULA_PATH: ${{ steps.update.outputs.formula_path }}
           FORMULA_NAME: ${{ steps.update.outputs.formula_name }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
@@ -86,12 +101,33 @@ jobs:
             exit 0
           fi
 
-          cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/tap)/Formula/"
+          if [ "$DRY_RUN" = "true" ]; then
+            {
+              echo "### Dry run: commit and push skipped"
+              echo
+              echo '```diff'
+              git diff --cached
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git diff --cached --stat
+            echo "::notice::Dry run: formula audited; commit and push skipped."
+            exit 0
+          fi
 
-          brew audit --strict --online "jacksonfergusondev/tap/$FORMULA_NAME"
           git commit -m "chore: bump $FORMULA_NAME to $TAG and sync python resources"
 
           # Credentials are not persisted by checkout; supply them only for the push.
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_GITHUB_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$AUTH_HEADER"
-          git -c "http.https://github.com/.extraheader=$AUTH_HEADER" push
+          authed_git() { git -c "http.https://github.com/.extraheader=$AUTH_HEADER" "$@"; }
+
+          # Another release may have pushed to the tap meanwhile; rebase and retry.
+          for attempt in 1 2 3; do
+            if authed_git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/3); rebasing onto the latest tap."
+            authed_git pull --rebase
+          done
+          echo "::error::Could not push to the tap after 3 attempts."
+          exit 1
