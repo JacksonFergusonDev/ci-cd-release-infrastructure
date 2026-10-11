@@ -53,7 +53,7 @@ ignore = ["D100", "D104", "D107", "E501", "S603", "S607"]
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ci-cd-release-infrastructure"]
+known-first-party = ["scripts"]
 section-order = [
     "future",
     "standard-library",
@@ -85,7 +85,7 @@ warn_return_any = false
 # ---- pytest ---- #
 
 [tool.pytest.ini_options]
-addopts = "--strict-markers"
+addopts = "--strict-markers --cov"
 testpaths = ["tests"]
 pythonpath = ["."]
 
@@ -97,7 +97,7 @@ branch = true
 omit = ["scripts/**/__init__.py"]
 show_missing = true
 skip_covered = true
-fail_under = 85
+fail_under = 90
 
 # ---- rumdl  ---- #
 
@@ -133,11 +133,3 @@ siblings-only = true
 # Use "one" style (1., 1., 1.) so reordering list items doesn't create massive diff churn
 [tool.rumdl.MD029]
 style = "one"
-
-# --- Per‑directory overrides for docs/ ---
-# Relax rules that conflict with Zensical / Python‑Markdown extensions
-[tool.rumdl.per-file-ignores]
-"docs/**/*.md" = [
-    "MD041", # first line need not be a top‑level heading
-    "MD046", # code block style – Zensical extensions require mixing fenced and indented blocks for admonitions/tabs
-]

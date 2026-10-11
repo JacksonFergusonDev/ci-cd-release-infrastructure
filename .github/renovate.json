@@ -8,6 +8,14 @@
     "automergeType": "pr",
     "platformAutomerge": true,
     "rebaseWhen": "auto",
+    "pre-commit": {
+        "enabled": true
+    },
+    "pep723": {
+        "managerFilePatterns": [
+            "/^scripts/release\\.py$/"
+        ]
+    },
     "packageRules": [
         {
             "description": "Pin digests for GitHub Actions",
