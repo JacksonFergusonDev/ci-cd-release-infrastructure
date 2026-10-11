@@ -45,20 +45,13 @@ jobs:
           path: homebrew-tap
           persist-credentials: false
 
-      - name: Check out Tooling Repo (for the Python script)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: JacksonFergusonDev/ci-cd-release-infrastructure
-          path: tooling-repo
-          persist-credentials: false
-
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.14"
 
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@eb02c69dbabdb66ff183c614f4ce7ab3c077592c # main
+        uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # 2026.09.28.1
 
       - name: Trust the tap
         run: brew trust JacksonFergusonDev/tap
@@ -68,19 +61,13 @@ jobs:
 
       - name: Update Formula
         id: update
-        env:
-          TAG: ${{ inputs.tag }}
-          PACKAGE_NAME: ${{ inputs.package_name }}
-          FORMULA_PATH: ${{ inputs.formula_path }}
-        run: |
-          ARGS=(--version "$TAG" --caller-dir "caller-repo" --tap-dir "homebrew-tap")
-          if [ -n "$PACKAGE_NAME" ]; then
-            ARGS+=(--package "$PACKAGE_NAME")
-          fi
-          if [ -n "$FORMULA_PATH" ]; then
-            ARGS+=(--formula-path "$FORMULA_PATH")
-          fi
-          uv run tooling-repo/scripts/update_homebrew.py "${ARGS[@]}"
+        uses: $/.github/actions/update-formula-pypi
+        with:
+          package_name: ${{ inputs.package_name }}
+          tag: ${{ inputs.tag }}
+          formula_path: ${{ inputs.formula_path }}
+          caller_dir: caller-repo
+          tap_dir: homebrew-tap
 
       - name: Commit and Push
         working-directory: homebrew-tap

@@ -113,3 +113,5 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+        # actionlint does not yet understand `$/` self-repository refs (rhysd/actionlint#711)
+        args: [-ignore, 'specifying action "\$/']

@@ -20,10 +20,14 @@ Centralized infrastructure repository for reusable GitHub Actions workflows and 
 
 ```text
 .
-├── .github/workflows/
-│   ├── ci.yml                     # Internal verification pipeline
-│   ├── update-homebrew.yml        # Reusable workflow for PyPI-published packages
-│   └── update-homebrew-local.yml  # Reusable workflow using caller repository manifests
+├── .github/
+│   ├── actions/
+│   │   ├── update-formula-pypi/   # Internal step for update-homebrew.yml
+│   │   └── update-formula-local/  # Internal step for update-homebrew-local.yml
+│   └── workflows/
+│       ├── ci.yml                     # Internal verification pipeline
+│       ├── update-homebrew.yml        # Reusable workflow for PyPI-published packages
+│       └── update-homebrew-local.yml  # Reusable workflow using caller repository manifests
 ├── scripts/
 │   ├── _brew_utils.py             # Shared PyPI querying and Homebrew splicing logic
 │   ├── release.py                 # Turnkey atomic release orchestrator
@@ -39,6 +43,8 @@ Centralized infrastructure repository for reusable GitHub Actions workflows and 
 ---
 
 ## 🔄 Reusable Workflows
+
+Each workflow runs its scripts through a composite action referenced with GitHub's `$/` self-repository syntax, so the scripts always come from the same commit as the workflow you call. Pinning the workflow (`@<commit-sha>`) therefore pins everything it executes; `@main` tracks the latest changes.
 
 ### 1. Homebrew Tap Updater (`update-homebrew.yml`)
 
@@ -125,8 +131,10 @@ A turnkey, atomic release orchestrator for uv-based Python projects. Executes a 
 ```just
 # Bump project version (part: major, minor, patch), sync lockfile, commit, tag, and atomic push
 bump part:
-    uv run --refresh https://raw.githubusercontent.com/JacksonFergusonDev/ci-cd-release-infrastructure/refs/heads/main/scripts/release.py {{ part }}
+    uv run https://raw.githubusercontent.com/JacksonFergusonDev/ci-cd-release-infrastructure/<commit-sha>/scripts/release.py {{ part }}
 ```
+
+Pin the URL to a commit SHA so the script that commits, tags, and pushes your project only changes when you choose to update it. Replacing `<commit-sha>` with `refs/heads/main` (plus `--refresh`) follows the latest version instead.
 
 ---
 
