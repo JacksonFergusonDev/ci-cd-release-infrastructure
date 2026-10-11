@@ -11,8 +11,8 @@ Executes a two-phase release workflow:
 1. Phase 1 (Pre-Flight): Read-only validations (clean working tree, branch guard,
    remote sync check, dry-run SemVer computation, local & remote tag collision checks).
 2. Phase 2 (Transactional Execution): Atomically updates pyproject.toml, updates lockfile,
-   creates release commit, creates annotated tag, and atomically pushes to remote,
-   with automated rollback if any step fails or is interrupted.
+   creates release commit, creates annotated tag, and atomically pushes the branch and
+   that tag to remote, with automated rollback if any step fails or is interrupted.
 """
 
 import argparse
@@ -30,7 +30,7 @@ import tomlkit
 
 SEMVER_RE = re.compile(
     r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
-    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+    r"(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
 )
 
 
@@ -132,6 +132,16 @@ def compute_bumped_version(current_version: str, part: str) -> str:
     major = int(match["major"])
     minor = int(match["minor"])
     patch = int(match["patch"])
+
+    # A prerelease precedes its release, so bumping to that release finalizes it
+    # (1.0.0-rc.1 -> 1.0.0) rather than skipping it (SemVer / npm semantics).
+    if match["pre"]:
+        if part == "patch":
+            return f"{major}.{minor}.{patch}"
+        if part == "minor" and patch == 0:
+            return f"{major}.{minor}.0"
+        if part == "major" and minor == 0 and patch == 0:
+            return f"{major}.0.0"
 
     if part == "major":
         return f"{major + 1}.0.0"
@@ -325,8 +335,16 @@ def main(argv: list[str] | None = None) -> None:
     _output(f"Version: {current_version} -> {new_version}")
     initial_rev = local_hash
 
+    # Snapshot what Phase 2 may touch so rollback restores it exactly, including
+    # a uv.lock that is new or gitignored (git alone can't restore those).
+    lock_path = Path("uv.lock")
+    snapshots = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (pyproject_path, lock_path)
+    }
+    lock_ignored = run_cmd(["git", "check-ignore", "-q", "uv.lock"], check=False)
+
     tag_created = False
-    commit_created = False
     files_mutated = False
 
     def rollback() -> None:
@@ -336,35 +354,64 @@ def main(argv: list[str] | None = None) -> None:
             stderr=True,
             blank=True,
         )
-        if tag_created:
-            run_cmd(["git", "tag", "-d", new_tag], check=False)
-        if commit_created:
-            run_cmd(["git", "reset", "--hard", initial_rev], check=False)
-        elif files_mutated:
-            run_cmd(["git", "checkout", "--", "pyproject.toml", "uv.lock"], check=False)
-        _output(
-            f"Rollback complete. Repository cleanly restored to {initial_rev[:8]}.",
-            prefix="success",
-            stderr=True,
-        )
+        failures: list[str] = []
+        if (
+            tag_created
+            and run_cmd(["git", "tag", "-d", new_tag], check=False).returncode
+        ):
+            failures.append(f"delete tag {new_tag}")
+        # The tree was verified clean, so a hard reset discards only release changes
+        # and also undoes the release commit if one was created.
+        if (
+            files_mutated
+            and run_cmd(
+                ["git", "reset", "--hard", "--quiet", initial_rev], check=False
+            ).returncode
+        ):
+            failures.append(f"reset to {initial_rev[:8]}")
+        if files_mutated:
+            for path, content in snapshots.items():
+                try:
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(content)
+                except OSError as e:
+                    failures.append(f"restore {path} ({e})")
+
+        if failures:
+            _output(
+                "Rollback incomplete. Could not: "
+                + "; ".join(failures)
+                + f".\nRestore manually to {initial_rev[:8]} before retrying.",
+                prefix="error",
+                stderr=True,
+            )
+        else:
+            _output(
+                f"Rollback complete. Repository cleanly restored to {initial_rev[:8]}.",
+                prefix="success",
+                stderr=True,
+            )
 
     try:
         # 1. Mutate pyproject.toml
         _output(f"Updating pyproject.toml to version {new_version}", prefix="1/5")
         doc["project"]["version"] = new_version
-        atomic_write_text(pyproject_path, tomlkit.dumps(doc))
         files_mutated = True
+        atomic_write_text(pyproject_path, tomlkit.dumps(doc))
 
         # 2. Synchronize lockfile
-        _output("Updating lockfile via uv sync", prefix="2/5")
-        run_cmd(["uv", "sync"], capture=False)
-        run_cmd(["uv", "lock", "--check"], capture=False)
+        _output("Updating lockfile via uv lock", prefix="2/5")
+        run_cmd(["uv", "lock"], capture=False)
 
         # 3. Stage and commit
         _output(f"Creating release commit for {new_version}", prefix="3/5")
-        run_cmd(["git", "add", "pyproject.toml", "uv.lock"])
+        release_files = ["pyproject.toml"]
+        if lock_path.exists() and lock_ignored.returncode != 0:
+            release_files.append("uv.lock")
+        run_cmd(["git", "add", *release_files])
         run_cmd(["git", "commit", "-m", f"chore: bump version to {new_version}"])
-        commit_created = True
 
         # 4. Create annotated tag
         _output(f"Creating annotated tag {new_tag}", prefix="4/5")
@@ -374,11 +421,19 @@ def main(argv: list[str] | None = None) -> None:
         # 5. Push atomically to remote
         if not args.no_push:
             _output(
-                f"Atomically pushing commit and {new_tag} to {args.remote}",
+                f"Atomically pushing {args.branch} and {new_tag} to {args.remote}",
                 prefix="5/5",
             )
+            # Push only the release branch and the new tag, never other local tags.
             run_cmd(
-                ["git", "push", args.remote, "HEAD", "--tags", "--atomic"],
+                [
+                    "git",
+                    "push",
+                    "--atomic",
+                    args.remote,
+                    f"HEAD:refs/heads/{args.branch}",
+                    f"refs/tags/{new_tag}",
+                ],
                 capture=False,
             )
         else:

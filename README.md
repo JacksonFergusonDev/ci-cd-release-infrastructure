@@ -134,15 +134,15 @@ A turnkey, atomic release orchestrator for uv-based Python projects. Executes a 
    - Executes any optional `--pre-flight` commands.
 1. **Phase 2: Transactional Execution & Rollback**
    - Updates `[project.version]` in `pyproject.toml`.
-   - Synchronizes `uv.lock` via `uv sync` and checks lock integrity (`uv lock --check`).
+   - Updates `uv.lock` via `uv lock` (committed unless the lockfile is gitignored).
    - Stages and creates release commit.
    - Creates annotated tag.
-   - Atomically pushes branch and tag to remote (`git push origin HEAD --tags --atomic`), unless `--no-push` is specified.
-   - Automatically rolls back (deletes tag, runs `git reset --hard`) if any step fails or is aborted via `Ctrl+C`.
+   - Atomically pushes only the release branch and the new tag (`git push --atomic origin HEAD:refs/heads/<branch> refs/tags/<tag>`), unless `--no-push` is specified. Other local tags are never pushed.
+   - Automatically rolls back (deletes the tag, resets to the starting commit, and restores `pyproject.toml` and `uv.lock` byte-for-byte, removing a lockfile the release created) if any step fails or is aborted via `Ctrl+C`. If a rollback step fails, it says so and names the commit to restore manually.
 
 #### Flags & Options
 
-- `part` *(required)*: SemVer part to increment (`major`, `minor`, `patch`).
+- `part` *(required)*: SemVer part to increment (`major`, `minor`, `patch`). Bumping a prerelease to the release it precedes finalizes it (`1.0.0-rc.1` + `patch` → `1.0.0`).
 - `--branch <name>`: Expected release branch (default: `main`).
 - `--remote <name>`: Git remote target (default: `origin`).
 - `--dry-run`: Validates pre-flight checks and previews the candidate version without mutating repository state.

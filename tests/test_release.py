@@ -59,6 +59,23 @@ def test_atomic_write_text(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "hello world"
 
 
+@pytest.mark.parametrize(
+    ("current", "part", "expected"),
+    [
+        # Bumping to the release a prerelease precedes finalizes it
+        ("1.0.0-rc.1", "patch", "1.0.0"),
+        ("1.1.0-rc.1", "minor", "1.1.0"),
+        ("2.0.0-beta", "major", "2.0.0"),
+        # Otherwise the bump moves past it
+        ("1.1.1-rc.1", "minor", "1.2.0"),
+        ("1.1.0-rc.1", "major", "2.0.0"),
+        ("1.0.0+build.5", "patch", "1.0.1"),
+    ],
+)
+def test_compute_bumped_version_prerelease(current, part, expected) -> None:
+    assert release.compute_bumped_version(current, part) == expected
+
+
 def test_compute_bumped_version() -> None:
     assert release.compute_bumped_version("1.2.3", "major") == "2.0.0"
     assert release.compute_bumped_version("1.2.3", "minor") == "1.3.0"
@@ -246,8 +263,9 @@ def test_main_full_release_no_push(mock_release_env: Path, mocker, capsys) -> No
     assert doc["project"]["version"] == "1.1.0"
 
     # Verify git actions
-    assert ["uv", "sync"] in executed_cmds
-    assert ["git", "add", "pyproject.toml", "uv.lock"] in executed_cmds
+    assert ["uv", "lock"] in executed_cmds
+    # No uv.lock exists in this fixture, so only pyproject.toml is staged
+    assert ["git", "add", "pyproject.toml"] in executed_cmds
     assert ["git", "commit", "-m", "chore: bump version to 1.1.0"] in executed_cmds
     assert [
         "git",
@@ -291,4 +309,31 @@ def test_main_rollback_on_failure(mock_release_env: Path, mocker, capsys) -> Non
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "Rolling back local mutations" in err
-    assert ["git", "checkout", "--", "pyproject.toml", "uv.lock"] in executed_cmds
+    assert ["git", "reset", "--hard", "--quiet", "aaaa1111"] in executed_cmds
+    assert "Rollback complete" in err
+    doc = tomlkit.parse(mock_release_env.read_text(encoding="utf-8"))
+    assert doc["project"]["version"] == "1.0.0"
+
+
+def test_main_rollback_reports_failures(mock_release_env: Path, mocker, capsys) -> None:
+    mocker.patch("shutil.which", return_value="/usr/bin/git")
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n")
+        if cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "origin/main"]):
+            return subprocess.CompletedProcess(cmd, 0, stdout="aaaa1111\n")
+        if cmd[:2] == ["git", "push"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        if cmd[:3] in (["git", "tag", "-d"], ["git", "reset", "--hard"]):
+            return subprocess.CompletedProcess(cmd, 1, stdout="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    mocker.patch("scripts.release.run_cmd", side_effect=fake_run)
+
+    with pytest.raises(SystemExit):
+        release.main(["minor"])
+
+    err = capsys.readouterr().err
+    assert "Rollback incomplete. Could not: delete tag v1.1.0; reset to aaaa1111" in err
+    assert "Rollback complete" not in err
