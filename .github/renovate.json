@@ -18,6 +18,16 @@
     },
     "packageRules": [
         {
+            "description": "Homebrew/actions is updated by the custom manager instead.",
+            "matchManagers": [
+                "github-actions"
+            ],
+            "matchPackageNames": [
+                "Homebrew/actions"
+            ],
+            "enabled": false
+        },
+        {
             "description": "Pin digests for GitHub Actions",
             "matchManagers": [
                 "github-actions"
@@ -27,7 +37,8 @@
         {
             "description": "Group all non-major GitHub Action updates (digests, pins, patch, minor)",
             "matchManagers": [
-                "github-actions"
+                "github-actions",
+                "custom.regex"
             ],
             "matchUpdateTypes": [
                 "digest",
@@ -56,6 +67,28 @@
                 "major"
             ],
             "automerge": false
+        },
+        {
+            "description": "gitfluff v0.9.0's homebrew-tap submodule points at a commit that no longer exists, so the hook can't install. Skip it until a fixed release.",
+            "matchPackageNames": [
+                "Goldziher/gitfluff"
+            ],
+            "allowedVersions": "!/^v0\\.9\\.0$/"
+        }
+    ],
+    "customManagers": [
+        {
+            "description": "Homebrew/actions tags have four parts (2026.09.28.1), and the github-actions manager reads at most three from a version comment, so it looks up a tag that doesn't exist.",
+            "customType": "regex",
+            "managerFilePatterns": [
+                "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+            ],
+            "matchStrings": [
+                "uses:\\s*Homebrew/actions/[\\w-]+@(?<currentDigest>[a-f0-9]{40})\\s*#\\s*(?<currentValue>\\d+\\.\\d+\\.\\d+\\.\\d+)"
+            ],
+            "depNameTemplate": "Homebrew/actions",
+            "datasourceTemplate": "github-tags",
+            "versioningTemplate": "loose"
         }
     ]
 }
