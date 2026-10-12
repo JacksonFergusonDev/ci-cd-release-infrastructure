@@ -21,6 +21,9 @@ on:
       TAP_GITHUB_TOKEN:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   update-homebrew:
     name: Sync Formula & Python Resources
@@ -32,6 +35,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: caller-repo
+          persist-credentials: false
 
       - name: Check out Homebrew Tap
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -39,12 +43,14 @@ jobs:
           repository: JacksonFergusonDev/homebrew-tap
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           path: homebrew-tap
+          persist-credentials: false
 
       - name: Check out Tooling Repo (for the Python script)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: JacksonFergusonDev/ci-cd-release-infrastructure
           path: tooling-repo
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -62,22 +68,28 @@ jobs:
 
       - name: Update Formula
         id: update
+        env:
+          TAG: ${{ inputs.tag }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          FORMULA_PATH: ${{ inputs.formula_path }}
         run: |
-          ARGS=(--version "${{ inputs.tag }}" --caller-dir "caller-repo" --tap-dir "homebrew-tap")
-          if [ -n "${{ inputs.package_name }}" ]; then
-            ARGS+=(--package "${{ inputs.package_name }}")
+          ARGS=(--version "$TAG" --caller-dir "caller-repo" --tap-dir "homebrew-tap")
+          if [ -n "$PACKAGE_NAME" ]; then
+            ARGS+=(--package "$PACKAGE_NAME")
           fi
-          if [ -n "${{ inputs.formula_path }}" ]; then
-            ARGS+=(--formula-path "${{ inputs.formula_path }}")
+          if [ -n "$FORMULA_PATH" ]; then
+            ARGS+=(--formula-path "$FORMULA_PATH")
           fi
           uv run tooling-repo/scripts/update_homebrew.py "${ARGS[@]}"
 
       - name: Commit and Push
         working-directory: homebrew-tap
+        env:
+          TAG: ${{ inputs.tag }}
+          FORMULA_PATH: ${{ steps.update.outputs.formula_path }}
+          FORMULA_NAME: ${{ steps.update.outputs.formula_name }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
-          FORMULA_PATH="${{ steps.update.outputs.formula_path }}"
-          FORMULA_NAME="${{ steps.update.outputs.formula_name }}"
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$FORMULA_PATH"
@@ -90,5 +102,9 @@ jobs:
           cp "$FORMULA_PATH" "$(brew --repository jacksonfergusondev/tap)/Formula/"
 
           brew audit --strict --online "jacksonfergusondev/tap/$FORMULA_NAME"
-          git commit -m "chore: bump $FORMULA_NAME to ${{ inputs.tag }} and sync python resources"
-          git push
+          git commit -m "chore: bump $FORMULA_NAME to $TAG and sync python resources"
+
+          # Credentials are not persisted by checkout; supply them only for the push.
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_GITHUB_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$AUTH_HEADER"
+          git -c "http.https://github.com/.extraheader=$AUTH_HEADER" push
