@@ -106,6 +106,7 @@ def main() -> None:
                 [
                     "uv",
                     "export",
+                    "--locked",
                     "--no-dev",
                     "--no-hashes",
                     "--format",

@@ -63,6 +63,7 @@ jobs:
       # Optional: automatically inferred from pyproject.toml and defaulted to Formula/<package_name>.rb
       # package_name: "target-package"
       # formula_path: "Formula/target-package.rb"
+      # dry_run: true  # audit only; skip commit & push
     secrets:
       TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 ```
@@ -83,9 +84,29 @@ jobs:
       tag: ${{ github.ref_name }}
       # Optional: defaults to Formula/<package_name>.rb based on caller pyproject.toml
       # formula_path: "Formula/target-cli.rb"
+      # dry_run: true  # audit only; skip commit & push
     secrets:
       TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 ```
+
+### Testing Workflow Changes
+
+Both workflows accept `dry_run: true`, which runs every step through `brew audit` but skips the commit and push, writing the formula diff to the job summary instead. To exercise a branch of this repository end to end without touching the tap, point a caller's `workflow_dispatch` job at the branch:
+
+```yaml
+on: workflow_dispatch
+
+jobs:
+  test-homebrew-sync:
+    uses: JacksonFergusonDev/ci-cd-release-infrastructure/.github/workflows/update-homebrew.yml@<branch>
+    with:
+      tag: v1.2.3  # an existing release
+      dry_run: true
+    secrets:
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+```
+
+Because the scripts resolve to the workflow's own commit, this runs the branch's scripts as well as its workflow.
 
 ---
 
