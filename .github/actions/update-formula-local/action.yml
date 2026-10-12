@@ -1,0 +1,54 @@
+name: Update Homebrew Formula (Local Manifest)
+description: >-
+  Splice a GitHub release tarball and the caller's locked Python resources
+  into a Homebrew formula. Internal to the update-homebrew-local reusable
+  workflow; resolved via `$/` so the script always matches the workflow's
+  own commit.
+
+inputs:
+  repository:
+    description: GitHub repository that owns the release (owner/repo)
+    required: true
+  tag:
+    description: The release tag (e.g., v1.0.0)
+    required: true
+  formula_path:
+    description: Relative path to the formula in the tap (optional)
+    required: false
+    default: ''
+  caller_dir:
+    description: Path to the caller repository checkout
+    required: true
+  tap_dir:
+    description: Path to the Homebrew tap checkout
+    required: true
+
+outputs:
+  package_name:
+    description: Resolved package name
+    value: ${{ steps.update.outputs.package_name }}
+  formula_name:
+    description: Resolved formula name
+    value: ${{ steps.update.outputs.formula_name }}
+  formula_path:
+    description: Formula path relative to the tap root
+    value: ${{ steps.update.outputs.formula_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Update Formula
+      id: update
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+        TAG: ${{ inputs.tag }}
+        FORMULA_PATH: ${{ inputs.formula_path }}
+        CALLER_DIR: ${{ inputs.caller_dir }}
+        TAP_DIR: ${{ inputs.tap_dir }}
+      run: |
+        ARGS=(--repo "$REPOSITORY" --tag "$TAG" --caller-dir "$CALLER_DIR" --tap-dir "$TAP_DIR")
+        if [ -n "$FORMULA_PATH" ]; then
+          ARGS+=(--formula "$FORMULA_PATH")
+        fi
+        uv run "$GITHUB_ACTION_PATH/../../../scripts/update_homebrew_local.py" "${ARGS[@]}"

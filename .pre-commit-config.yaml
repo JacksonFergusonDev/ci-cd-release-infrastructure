@@ -77,7 +77,7 @@ repos:
         name: zizmor
         entry: uv run zizmor
         language: system
-        files: ^\.github/workflows/.*\.ya?ml$
+        files: ^\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml)$
         require_serial: true
 
       - id: pytest
@@ -113,3 +113,5 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+        # actionlint does not yet understand `$/` self-repository refs (rhysd/actionlint#711)
+        args: [-ignore, 'specifying action "\$/']

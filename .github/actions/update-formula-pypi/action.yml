@@ -1,0 +1,57 @@
+name: Update Homebrew Formula (PyPI)
+description: >-
+  Splice a PyPI release and its resolved Python resources into a Homebrew
+  formula. Internal to the update-homebrew reusable workflow; resolved via
+  `$/` so the script always matches the workflow's own commit.
+
+inputs:
+  tag:
+    description: The release tag (e.g., v1.0.0)
+    required: true
+  package_name:
+    description: The PyPI package name (optional, inferred from caller pyproject.toml)
+    required: false
+    default: ''
+  formula_path:
+    description: Relative path to the formula in the tap (optional)
+    required: false
+    default: ''
+  caller_dir:
+    description: Path to the caller repository checkout
+    required: true
+  tap_dir:
+    description: Path to the Homebrew tap checkout
+    required: true
+
+outputs:
+  package_name:
+    description: Resolved package name
+    value: ${{ steps.update.outputs.package_name }}
+  formula_name:
+    description: Resolved formula name
+    value: ${{ steps.update.outputs.formula_name }}
+  formula_path:
+    description: Formula path relative to the tap root
+    value: ${{ steps.update.outputs.formula_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Update Formula
+      id: update
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        PACKAGE_NAME: ${{ inputs.package_name }}
+        FORMULA_PATH: ${{ inputs.formula_path }}
+        CALLER_DIR: ${{ inputs.caller_dir }}
+        TAP_DIR: ${{ inputs.tap_dir }}
+      run: |
+        ARGS=(--version "$TAG" --caller-dir "$CALLER_DIR" --tap-dir "$TAP_DIR")
+        if [ -n "$PACKAGE_NAME" ]; then
+          ARGS+=(--package "$PACKAGE_NAME")
+        fi
+        if [ -n "$FORMULA_PATH" ]; then
+          ARGS+=(--formula-path "$FORMULA_PATH")
+        fi
+        uv run "$GITHUB_ACTION_PATH/../../../scripts/update_homebrew.py" "${ARGS[@]}"
