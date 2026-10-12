@@ -262,12 +262,51 @@ def find_sdist(metadata: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+def canonical_name(name: str) -> str:
+    """Normalize a distribution name per PEP 503 (e.g. ``My_Pkg`` -> ``my-pkg``)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+# Homebrew's primary platform. Resources are sdists, so the target only decides
+# which environment markers apply (e.g. dropping Windows- or Linux-only deps).
+TARGET_PLATFORM = "aarch64-apple-darwin"
+
+
+def formula_python_version(formula_path: Path) -> str | None:
+    """Return X.Y from the formula's ``depends_on "python@X.Y"``, if declared."""
+    content = formula_path.read_text(encoding="utf-8")
+    match = re.search(r'^\s*depends_on\s+"python@(\d+\.\d+)"', content, re.MULTILINE)
+    return match[1] if match else None
+
+
+def target_resolution_args(formula_path: Path) -> list[str]:
+    """Build ``uv pip compile`` flags that resolve for the formula's install target."""
+    args = ["--python-platform", TARGET_PLATFORM]
+    python_version = formula_python_version(formula_path)
+    if python_version:
+        args += ["--python-version", python_version]
+    else:
+        log(
+            f'No depends_on "python@X.Y" found in {formula_path.name}; '
+            "resolving for the runner's Python version.",
+            level="warning",
+        )
+    log(
+        f"Resolving for {TARGET_PLATFORM}, "
+        f"Python {python_version or 'from the runner'}."
+    )
+    return args
+
+
 def build_resource_blocks(requirements: Path, root_package: str) -> list[str]:
     """Render Homebrew resource blocks for pinned requirements using PyPI sdists.
 
-    The root package is excluded so the formula passes `brew audit`.
+    Requirements must already be resolved for the target platform. The root
+    package is excluded so the formula passes `brew audit`.
     """
     resource_blocks: list[str] = []
+    seen: dict[str, str] = {}
+    root = canonical_name(root_package)
 
     with open(requirements, encoding="utf-8") as f:
         for line in f:
@@ -278,25 +317,42 @@ def build_resource_blocks(requirements: Path, root_package: str) -> list[str]:
             if not line or line.startswith("#") or line.startswith("-"):
                 continue
 
-            if "==" in line:
-                pkg, version = line.split("==")
-                pkg = re.sub(r"\[.*\]", "", pkg).strip()
-                version = version.strip()
-
-                # Excise the root package to pass Homebrew audits
-                if pkg.lower() == root_package.lower():
-                    continue
-
-                log(f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}")
-                sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
-
-                block = (
-                    f'  resource "{pkg}" do\n'
-                    f'    url "{sdist_url}"\n'
-                    f'    sha256 "{sdist_sha}"\n'
-                    f"  end"
+            if "==" not in line or " @ " in line:
+                log(
+                    f"Skipping '{line}': only exact PyPI pins (name==version) "
+                    "can become Homebrew resources.",
+                    level="warning",
                 )
-                resource_blocks.append(block)
+                continue
+
+            pkg, version = line.split("==")
+            pkg = re.sub(r"\[.*\]", "", pkg).strip()
+            version = version.strip()
+            name = canonical_name(pkg)
+
+            # Excise the root package to pass Homebrew audits
+            if name == root:
+                continue
+
+            if name in seen:
+                if seen[name] == version:
+                    continue
+                sys.exit(
+                    f"Conflicting pins for {pkg}: {seen[name]} and {version}. "
+                    "Requirements must be resolved for a single target platform."
+                )
+            seen[name] = version
+
+            log(f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}")
+            sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
+
+            block = (
+                f'  resource "{pkg}" do\n'
+                f'    url "{sdist_url}"\n'
+                f'    sha256 "{sdist_sha}"\n'
+                f"  end"
+            )
+            resource_blocks.append(block)
 
     return resource_blocks
 
@@ -316,15 +372,23 @@ def run_cmd(args: list[str], cwd: Path | None = None) -> str:
 def splice_formula(
     formula_path: Path, new_url: str, new_sha: str, resource_text: str
 ) -> None:
-    """Splice File Content for a Homebrew formula."""
+    """Splice File Content for a Homebrew formula.
+
+    Exits if any target is missing, rather than reporting a no-op as an update.
+    """
     content = formula_path.read_text(encoding="utf-8")
 
-    content = re.sub(
-        r'^  url\s+".*"', f'  url "{new_url}"', content, flags=re.MULTILINE, count=1
+    # Callables keep backslashes in the new values from being read as escapes.
+    content, url_count = re.subn(
+        r'^  url\s+".*"',
+        lambda _: f'  url "{new_url}"',
+        content,
+        flags=re.MULTILINE,
+        count=1,
     )
-    content = re.sub(
+    content, sha_count = re.subn(
         r'^  sha256\s+".*"',
-        f'  sha256 "{new_sha}"',
+        lambda _: f'  sha256 "{new_sha}"',
         content,
         flags=re.MULTILINE,
         count=1,
@@ -332,6 +396,25 @@ def splice_formula(
 
     pattern = r"(?<=# RESOURCE_BLOCK_START\n).*?(?=# RESOURCE_BLOCK_END)"
     replacement = f"{resource_text}\n  " if resource_text else "  "
-    content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+    content, block_count = re.subn(
+        pattern, lambda _: replacement, content, flags=re.DOTALL
+    )
+
+    missing = [
+        target
+        for target, count in [
+            ('top-level `  url "..."`', url_count),
+            ('top-level `  sha256 "..."`', sha_count),
+            (
+                "`# RESOURCE_BLOCK_START` / `# RESOURCE_BLOCK_END` sentinels",
+                block_count,
+            ),
+        ]
+        if count == 0
+    ]
+    if missing:
+        sys.exit(
+            f"Could not update {formula_path}; missing " + ", ".join(missing) + "."
+        )
 
     formula_path.write_text(content, encoding="utf-8")

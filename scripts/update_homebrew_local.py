@@ -24,6 +24,7 @@ try:
         run_cmd,
         run_logged,
         splice_formula,
+        target_resolution_args,
         write_summary,
     )
 except ImportError:
@@ -35,6 +36,7 @@ except ImportError:
         run_cmd,
         run_logged,
         splice_formula,
+        target_resolution_args,
         write_summary,
     )
 
@@ -99,6 +101,7 @@ def main() -> None:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
+            exported = tmp_path / "exported.txt"
             reqs_file = tmp_path / "reqs.txt"
 
             run_cmd(
@@ -107,13 +110,31 @@ def main() -> None:
                     "export",
                     "--locked",
                     "--no-dev",
+                    "--no-emit-project",
                     "--no-hashes",
                     "--format",
                     "requirements-txt",
                     "-o",
-                    str(reqs_file),
+                    str(exported),
                 ],
                 cwd=caller_dir,
+            )
+
+            # The export is universal (one pin per marker fork). Keep the locked
+            # versions but evaluate markers for the formula's install target.
+            run_cmd(
+                [
+                    "uv",
+                    "pip",
+                    "compile",
+                    "--no-deps",
+                    "--no-annotate",
+                    "--no-header",
+                    *target_resolution_args(formula_path),
+                    str(exported),
+                    "-o",
+                    str(reqs_file),
+                ]
             )
 
             # 3. Parse requirements and query PyPI directly

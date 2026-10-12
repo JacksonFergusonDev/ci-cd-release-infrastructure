@@ -170,6 +170,81 @@ def test_build_resource_blocks_parses_pinned_requirements(mocker, tmp_path):
     ]
 
 
+def test_build_resource_blocks_excludes_root_by_canonical_name(mocker, tmp_path):
+    reqs = tmp_path / "reqs.txt"
+    reqs.write_text("my-tool==1.0.0\ndep==2.0\n", encoding="utf-8")
+    mocker.patch("scripts._brew_utils.get_pypi_sdist", return_value=("u", "s"))
+
+    blocks = _brew_utils.build_resource_blocks(reqs, "My_Tool")
+
+    assert len(blocks) == 1
+    assert 'resource "dep"' in blocks[0]
+
+
+def test_build_resource_blocks_warns_on_unpinned(mocker, tmp_path, capsys):
+    reqs = tmp_path / "reqs.txt"
+    reqs.write_text("pkg @ git+https://example.com/pkg\n", encoding="utf-8")
+    sdist = mocker.patch("scripts._brew_utils.get_pypi_sdist")
+
+    assert _brew_utils.build_resource_blocks(reqs, "root") == []
+    sdist.assert_not_called()
+    assert "Skipping 'pkg @ git+https://example.com/pkg'" in capsys.readouterr().err
+
+
+def test_build_resource_blocks_rejects_conflicting_pins(mocker, tmp_path):
+    reqs = tmp_path / "reqs.txt"
+    reqs.write_text(
+        "numpy==2.0.2 ; python_version < '3.10'\nnumpy==2.5.4\n", encoding="utf-8"
+    )
+    mocker.patch("scripts._brew_utils.get_pypi_sdist", return_value=("u", "s"))
+
+    with pytest.raises(SystemExit, match="Conflicting pins for numpy"):
+        _brew_utils.build_resource_blocks(reqs, "root")
+
+
+def test_build_resource_blocks_skips_identical_duplicates(mocker, tmp_path):
+    reqs = tmp_path / "reqs.txt"
+    reqs.write_text("Dep==1.0\ndep==1.0\n", encoding="utf-8")
+    sdist = mocker.patch("scripts._brew_utils.get_pypi_sdist", return_value=("u", "s"))
+
+    assert len(_brew_utils.build_resource_blocks(reqs, "root")) == 1
+    sdist.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("My_Pkg", "my-pkg"), ("zope.interface", "zope-interface"), ("a--b__c", "a-b-c")],
+)
+def test_canonical_name(name, expected):
+    assert _brew_utils.canonical_name(name) == expected
+
+
+def test_target_resolution_args_uses_formula_python(tmp_path):
+    formula = tmp_path / "f.rb"
+    formula.write_text(
+        'class F < Formula\n  depends_on "rust" => :build\n  depends_on "python@3.13"\nend',
+        encoding="utf-8",
+    )
+
+    assert _brew_utils.target_resolution_args(formula) == [
+        "--python-platform",
+        "aarch64-apple-darwin",
+        "--python-version",
+        "3.13",
+    ]
+
+
+def test_target_resolution_args_without_python_dependency(tmp_path, capsys):
+    formula = tmp_path / "f.rb"
+    formula.write_text("class F < Formula\nend", encoding="utf-8")
+
+    assert _brew_utils.target_resolution_args(formula) == [
+        "--python-platform",
+        "aarch64-apple-darwin",
+    ]
+    assert 'No depends_on "python@X.Y"' in capsys.readouterr().err
+
+
 def test_find_sdist():
     assert _brew_utils.find_sdist({"urls": [{"packagetype": "bdist_wheel"}]}) is None
     assert _brew_utils.find_sdist(
@@ -179,6 +254,43 @@ def test_find_sdist():
             ]
         }
     ) == ("u", "s")
+
+
+@pytest.mark.parametrize(
+    ("formula", "missing"),
+    [
+        (
+            'class T < Formula\n  sha256 "s"\n  # RESOURCE_BLOCK_START\n  # RESOURCE_BLOCK_END\nend',
+            "url",
+        ),
+        (
+            'class T < Formula\n  url "u"\n  # RESOURCE_BLOCK_START\n  # RESOURCE_BLOCK_END\nend',
+            "sha256",
+        ),
+        ('class T < Formula\n  url "u"\n  sha256 "s"\nend', "RESOURCE_BLOCK_START"),
+    ],
+)
+def test_splice_formula_fails_when_target_missing(tmp_path, formula, missing):
+    formula_path = tmp_path / "formula.rb"
+    formula_path.write_text(formula, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match=missing):
+        _brew_utils.splice_formula(formula_path, "new_url", "new_sha", "")
+    assert formula_path.read_text(encoding="utf-8") == formula
+
+
+def test_splice_formula_keeps_backslashes_literal(tmp_path):
+    formula_path = tmp_path / "formula.rb"
+    formula_path.write_text(
+        'class T < Formula\n  url "u"\n  sha256 "s"\n  # RESOURCE_BLOCK_START\n  # RESOURCE_BLOCK_END\nend',
+        encoding="utf-8",
+    )
+
+    _brew_utils.splice_formula(formula_path, r"https://x/a\1b", "sha", r"  # \g<0>")
+
+    content = formula_path.read_text(encoding="utf-8")
+    assert r'url "https://x/a\1b"' in content
+    assert r"  # \g<0>" in content
 
 
 def test_get_caller_project_name_pep621(tmp_path):
