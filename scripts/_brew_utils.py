@@ -298,6 +298,63 @@ def target_resolution_args(formula_path: Path) -> list[str]:
     return args
 
 
+def locked_requirements(caller_dir: Path, formula_path: Path, out_dir: Path) -> Path:
+    """Export the caller's locked runtime dependencies for the formula's target.
+
+    The formula ships exactly the versions the caller's CI tested, so a stale
+    lockfile fails the run instead of being re-resolved.
+
+    Args:
+        caller_dir: Root of the caller repository, containing ``uv.lock``.
+        formula_path: The formula, whose Python version sets the target.
+        out_dir: Directory for the intermediate requirements files.
+
+    Returns:
+        Path to pinned requirements with markers evaluated for the target.
+    """
+    if not (caller_dir / "uv.lock").is_file():
+        sys.exit(
+            f"No uv.lock found in {caller_dir}. The formula's Python resources "
+            "come from the caller's lockfile; commit one with `uv lock`."
+        )
+
+    exported = out_dir / "exported.txt"
+    requirements = out_dir / "reqs.txt"
+    run_cmd(
+        [
+            "uv",
+            "export",
+            "--locked",
+            "--no-dev",
+            "--no-emit-project",
+            "--no-hashes",
+            "--format",
+            "requirements-txt",
+            "-o",
+            str(exported),
+        ],
+        cwd=caller_dir,
+    )
+
+    # The export is universal (one pin per marker fork). Keep the locked
+    # versions but evaluate markers for the formula's install target.
+    run_cmd(
+        [
+            "uv",
+            "pip",
+            "compile",
+            "--no-deps",
+            "--no-annotate",
+            "--no-header",
+            *target_resolution_args(formula_path),
+            str(exported),
+            "-o",
+            str(requirements),
+        ]
+    )
+    return requirements
+
+
 def build_resource_blocks(requirements: Path, root_package: str) -> list[str]:
     """Render Homebrew resource blocks for pinned requirements using PyPI sdists.
 

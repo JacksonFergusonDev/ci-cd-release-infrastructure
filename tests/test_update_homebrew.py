@@ -97,6 +97,8 @@ def test_main_missing_formula(mocker, tmp_path):
             "0.1.0",
             "--formula-path",
             str(tmp_path / "missing.rb"),
+            "--caller-dir",
+            str(tmp_path),
         ],
     )
     with pytest.raises(SystemExit):
@@ -111,6 +113,9 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     formula_path.write_text(
         'class Test < Formula\n  depends_on "python@3.13"\nend', encoding="utf-8"
     )
+    caller_dir = tmp_path / "caller_repo"
+    caller_dir.mkdir()
+    (caller_dir / "uv.lock").touch()
 
     mocker.patch(
         "sys.argv",
@@ -122,6 +127,8 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
             str(formula_path),
             "--package",
             "test_pkg",
+            "--caller-dir",
+            str(caller_dir),
         ],
     )
 
@@ -135,15 +142,25 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
     )
 
     def mock_run_cmd(args, cwd=None):
-        if "compile" in args:
+        output_file = Path(args[args.index("-o") + 1])
+        if "export" in args:
+            # Pins come from the caller's lockfile, never a fresh resolution
+            assert cwd == caller_dir
+            assert "--locked" in args
+            assert "--no-dev" in args
+            assert "--no-emit-project" in args
+            output_file.write_text(
+                "dep==1.0.0\ncolorama==0.4.6 ; sys_platform == 'win32'\n",
+                encoding="utf-8",
+            )
+        elif "compile" in args:
+            assert "--no-deps" in args
             assert args[args.index("--python-platform") + 1] == "aarch64-apple-darwin"
             assert args[args.index("--python-version") + 1] == "3.13"
-            output_file = Path(args[args.index("-o") + 1])
-            # uv normalizes names: the root `test_pkg` is emitted as `test-pkg`
-            output_file.write_text("dep==1.0.0\ntest-pkg==0.1.0\n", encoding="utf-8")
+            output_file.write_text("dep==1.0.0\n", encoding="utf-8")
         return ""
 
-    mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
 
     mocker.patch(
         "scripts._brew_utils.get_pypi_sdist", return_value=("dep_url", "dep_sha")
@@ -177,6 +194,7 @@ def test_main_inferred_from_pyproject(mocker, tmp_path):
     (caller_dir / "pyproject.toml").write_text(
         '[project]\nname = "my-tool"\nversion = "0.1.0"\n', encoding="utf-8"
     )
+    (caller_dir / "uv.lock").touch()
 
     tap_dir = tmp_path / "tap_repo"
     formula_dir = tap_dir / "Formula"
@@ -207,12 +225,11 @@ def test_main_inferred_from_pyproject(mocker, tmp_path):
     )
 
     def mock_run_cmd(args, cwd=None):
-        if "compile" in args:
-            output_file = Path(args[args.index("-o") + 1])
-            output_file.write_text("my-tool==0.1.0\n", encoding="utf-8")
+        output_file = Path(args[args.index("-o") + 1])
+        output_file.write_text("", encoding="utf-8")
         return ""
 
-    mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
     mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")
 
     update_homebrew.main()
@@ -255,6 +272,7 @@ def test_main_package_mismatch_error(mocker, tmp_path):
 def test_main_custom_formula_path_success(mocker, tmp_path):
     formula_path = tmp_path / "custom-name.rb"
     formula_path.write_text("class CustomName < Formula\nend", encoding="utf-8")
+    (tmp_path / "uv.lock").touch()
 
     mocker.patch(
         "sys.argv",
@@ -266,6 +284,8 @@ def test_main_custom_formula_path_success(mocker, tmp_path):
             str(formula_path),
             "--package",
             "my-package",
+            "--caller-dir",
+            str(tmp_path),
         ],
     )
 
@@ -279,12 +299,11 @@ def test_main_custom_formula_path_success(mocker, tmp_path):
     )
 
     def mock_run_cmd(args, cwd=None):
-        if "compile" in args:
-            output_file = Path(args[args.index("-o") + 1])
-            output_file.write_text("my-package==0.1.0\n", encoding="utf-8")
+        output_file = Path(args[args.index("-o") + 1])
+        output_file.write_text("", encoding="utf-8")
         return ""
 
-    mocker.patch("scripts.update_homebrew.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
     mock_splice = mocker.patch("scripts.update_homebrew.splice_formula")
 
     update_homebrew.main()
@@ -292,3 +311,54 @@ def test_main_custom_formula_path_success(mocker, tmp_path):
     mock_splice.assert_called_once()
     args, _ = mock_splice.call_args
     assert args[0] == formula_path
+
+
+def test_main_missing_caller_dir(mocker, tmp_path):
+    formula_path = tmp_path / "formula.rb"
+    formula_path.touch()
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew.py",
+            "--version",
+            "0.1.0",
+            "--formula-path",
+            str(formula_path),
+            "--caller-dir",
+            str(tmp_path / "missing"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="Caller directory not found"):
+        update_homebrew.main()
+
+
+def test_main_requires_caller_lockfile(mocker, tmp_path):
+    formula_path = tmp_path / "my-package.rb"
+    formula_path.write_text("class MyPackage < Formula\nend", encoding="utf-8")
+    mocker.patch(
+        "sys.argv",
+        [
+            "update_homebrew.py",
+            "--version",
+            "0.1.0",
+            "--formula-path",
+            str(formula_path),
+            "--package",
+            "my-package",
+            "--caller-dir",
+            str(tmp_path),
+        ],
+    )
+    mocker.patch(
+        "scripts.update_homebrew.get_pypi_metadata",
+        return_value={
+            "urls": [
+                {"packagetype": "sdist", "url": "url", "digests": {"sha256": "sha"}}
+            ]
+        },
+    )
+    run_cmd = mocker.patch("scripts._brew_utils.run_cmd")
+
+    with pytest.raises(SystemExit, match=r"No uv\.lock found"):
+        update_homebrew.main()
+    run_cmd.assert_not_called()
