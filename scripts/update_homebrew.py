@@ -9,7 +9,6 @@ from PyPI, and splices the formula using specified sentinels.
 
 import argparse
 import json
-import re
 import tempfile
 import time
 import urllib.error
@@ -19,7 +18,8 @@ from typing import Any
 
 try:
     from ._brew_utils import (
-        get_pypi_sdist,
+        build_resource_blocks,
+        find_sdist,
         log,
         log_group,
         resolve_and_validate_formula,
@@ -30,7 +30,8 @@ try:
     )
 except ImportError:
     from _brew_utils import (  # type: ignore[import-not-found,no-redef]
-        get_pypi_sdist,
+        build_resource_blocks,
+        find_sdist,
         log,
         log_group,
         resolve_and_validate_formula,
@@ -80,11 +81,10 @@ def get_pypi_metadata(
 
 def extract_sdist_info(metadata: dict[str, Any]) -> tuple[str, str]:
     """Parse the PyPI metadata payload for the source distribution details."""
-    for url_info in metadata.get("urls", []):
-        if url_info.get("packagetype") == "sdist":
-            return str(url_info["url"]), str(url_info["digests"]["sha256"])
-
-    raise ValueError("sdist information not found in PyPI metadata.")
+    sdist = find_sdist(metadata)
+    if sdist is None:
+        raise ValueError("sdist information not found in PyPI metadata.")
+    return sdist
 
 
 def main() -> None:
@@ -165,37 +165,7 @@ def main() -> None:
 
             # 4. Parse requirements and query PyPI directly
             log("Resolving PyPI resource blocks...")
-            resource_blocks: list[str] = []
-
-            with open(reqs_txt, encoding="utf-8") as f:
-                for line in f:
-                    # Strip environment markers (e.g., ; python_version >= '3.9')
-                    line = line.split(";")[0].strip()
-
-                    if not line or line.startswith("#") or line.startswith("-"):
-                        continue
-
-                    if "==" in line:
-                        pkg, version = line.split("==")
-                        pkg = re.sub(r"\[.*\]", "", pkg).strip()
-                        version = version.strip()
-
-                        # Excise the root package to pass Homebrew audits
-                        if pkg.lower() == package_name.lower():
-                            continue
-
-                        log(
-                            f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}"
-                        )
-                        sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
-
-                        block = (
-                            f'  resource "{pkg}" do\n'
-                            f'    url "{sdist_url}"\n'
-                            f'    sha256 "{sdist_sha}"\n'
-                            f"  end"
-                        )
-                        resource_blocks.append(block)
+            resource_blocks = build_resource_blocks(reqs_txt, package_name)
 
             resource_text = "\n\n".join(resource_blocks)
 

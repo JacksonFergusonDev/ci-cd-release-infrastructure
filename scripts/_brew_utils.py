@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from html import escape
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 
 def _github_actions() -> bool:
@@ -248,11 +248,57 @@ def get_pypi_sdist(package: str, version: str) -> tuple[str, str]:
             )
             time.sleep(delay)
 
-    for info in data.get("urls", []):
+    sdist = find_sdist(data)
+    if sdist is None:
+        sys.exit(f"No sdist found for {package}=={version} on PyPI.")
+    return sdist
+
+
+def find_sdist(metadata: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the sdist URL and SHA256 from a PyPI JSON payload, if present."""
+    for info in metadata.get("urls", []):
         if info.get("packagetype") == "sdist":
             return str(info["url"]), str(info["digests"]["sha256"])
+    return None
 
-    sys.exit(f"No sdist found for {package}=={version} on PyPI.")
+
+def build_resource_blocks(requirements: Path, root_package: str) -> list[str]:
+    """Render Homebrew resource blocks for pinned requirements using PyPI sdists.
+
+    The root package is excluded so the formula passes `brew audit`.
+    """
+    resource_blocks: list[str] = []
+
+    with open(requirements, encoding="utf-8") as f:
+        for line in f:
+            # Strip environment markers (e.g., ; python_version >= '3.9')
+            line = line.split(";")[0].strip()
+
+            # Skip comments and flags
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+
+            if "==" in line:
+                pkg, version = line.split("==")
+                pkg = re.sub(r"\[.*\]", "", pkg).strip()
+                version = version.strip()
+
+                # Excise the root package to pass Homebrew audits
+                if pkg.lower() == root_package.lower():
+                    continue
+
+                log(f"Resource {len(resource_blocks) + 1}: Fetching {pkg}=={version}")
+                sdist_url, sdist_sha = get_pypi_sdist(pkg, version)
+
+                block = (
+                    f'  resource "{pkg}" do\n'
+                    f'    url "{sdist_url}"\n'
+                    f'    sha256 "{sdist_sha}"\n'
+                    f"  end"
+                )
+                resource_blocks.append(block)
+
+    return resource_blocks
 
 
 def run_cmd(args: list[str], cwd: Path | None = None) -> str:
