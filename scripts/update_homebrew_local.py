@@ -18,25 +18,23 @@ from pathlib import Path
 try:
     from ._brew_utils import (
         build_resource_blocks,
+        locked_requirements,
         log,
         log_group,
         resolve_and_validate_formula,
-        run_cmd,
         run_logged,
         splice_formula,
-        target_resolution_args,
         write_summary,
     )
 except ImportError:
     from _brew_utils import (  # type: ignore[import-not-found,no-redef]
         build_resource_blocks,
+        locked_requirements,
         log,
         log_group,
         resolve_and_validate_formula,
-        run_cmd,
         run_logged,
         splice_formula,
-        target_resolution_args,
         write_summary,
     )
 
@@ -100,42 +98,7 @@ def main() -> None:
         log(f"Exporting local dependencies from {caller_dir}...")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            exported = tmp_path / "exported.txt"
-            reqs_file = tmp_path / "reqs.txt"
-
-            run_cmd(
-                [
-                    "uv",
-                    "export",
-                    "--locked",
-                    "--no-dev",
-                    "--no-emit-project",
-                    "--no-hashes",
-                    "--format",
-                    "requirements-txt",
-                    "-o",
-                    str(exported),
-                ],
-                cwd=caller_dir,
-            )
-
-            # The export is universal (one pin per marker fork). Keep the locked
-            # versions but evaluate markers for the formula's install target.
-            run_cmd(
-                [
-                    "uv",
-                    "pip",
-                    "compile",
-                    "--no-deps",
-                    "--no-annotate",
-                    "--no-header",
-                    *target_resolution_args(formula_path),
-                    str(exported),
-                    "-o",
-                    str(reqs_file),
-                ]
-            )
+            reqs_file = locked_requirements(caller_dir, formula_path, Path(tmp_dir))
 
             # 3. Parse requirements and query PyPI directly
             log("Resolving PyPI resource blocks...")

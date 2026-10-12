@@ -42,6 +42,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
 
     caller_dir = tmp_path / "caller_repo"
     caller_dir.mkdir()
+    (caller_dir / "uv.lock").touch()
 
     mocker.patch(
         "sys.argv",
@@ -88,7 +89,7 @@ def test_main_happy_path(mocker, tmp_path, monkeypatch, capsys):
             )
         return ""
 
-    mocker.patch("scripts.update_homebrew_local.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
 
     update_homebrew_local.main()
 
@@ -128,6 +129,7 @@ def test_get_sha256_error(mocker):
 def test_main_missing_formula(mocker, tmp_path):
     caller_dir = tmp_path / "caller"
     caller_dir.mkdir()
+    (caller_dir / "uv.lock").touch()
 
     mocker.patch(
         "sys.argv",
@@ -172,6 +174,7 @@ def test_main_missing_caller_dir(mocker, tmp_path):
 def test_main_inferred_from_pyproject(mocker, tmp_path):
     caller_dir = tmp_path / "caller"
     caller_dir.mkdir()
+    (caller_dir / "uv.lock").touch()
     (caller_dir / "pyproject.toml").write_text(
         '[project]\nname = "focal"\nversion = "0.1.0"\n', encoding="utf-8"
     )
@@ -211,7 +214,7 @@ def test_main_inferred_from_pyproject(mocker, tmp_path):
             output_file.write_text("", encoding="utf-8")
         return ""
 
-    mocker.patch("scripts.update_homebrew_local.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
     mocker.patch("scripts.update_homebrew_local.splice_formula")
 
     update_homebrew_local.main()
@@ -225,6 +228,7 @@ def test_main_inferred_from_pyproject(mocker, tmp_path):
 def test_main_custom_formula_path_with_pyproject(mocker, tmp_path):
     caller_dir = tmp_path / "caller"
     caller_dir.mkdir()
+    (caller_dir / "uv.lock").touch()
     (caller_dir / "pyproject.toml").write_text(
         '[project]\nname = "focal-cli"\nversion = "0.1.0"\n', encoding="utf-8"
     )
@@ -255,7 +259,7 @@ def test_main_custom_formula_path_with_pyproject(mocker, tmp_path):
             output_file.write_text("", encoding="utf-8")
         return ""
 
-    mocker.patch("scripts.update_homebrew_local.run_cmd", side_effect=mock_run_cmd)
+    mocker.patch("scripts._brew_utils.run_cmd", side_effect=mock_run_cmd)
     mocker.patch("scripts.update_homebrew_local.splice_formula")
 
     update_homebrew_local.main()

@@ -2,13 +2,15 @@
 """Synchronizes a Homebrew formula with a newly published PyPI release.
 
 This script polls PyPI for visibility of a specific version, extracts the
-root sdist URL and SHA256 hash, dynamically resolves the dependency tree
-using `uv pip compile`, fetches sdist vectors for all dependencies directly
-from PyPI, and splices the formula using specified sentinels.
+root sdist URL and SHA256 hash, pins the dependency tree from the caller's
+`uv.lock` so the formula ships what CI tested, fetches sdist vectors for all
+dependencies directly from PyPI, and splices the formula using specified
+sentinels.
 """
 
 import argparse
 import json
+import sys
 import tempfile
 import time
 import urllib.error
@@ -20,26 +22,24 @@ try:
     from ._brew_utils import (
         build_resource_blocks,
         find_sdist,
+        locked_requirements,
         log,
         log_group,
         resolve_and_validate_formula,
-        run_cmd,
         run_logged,
         splice_formula,
-        target_resolution_args,
         write_summary,
     )
 except ImportError:
     from _brew_utils import (  # type: ignore[import-not-found,no-redef]
         build_resource_blocks,
         find_sdist,
+        locked_requirements,
         log,
         log_group,
         resolve_and_validate_formula,
-        run_cmd,
         run_logged,
         splice_formula,
-        target_resolution_args,
         write_summary,
     )
 
@@ -109,8 +109,8 @@ def main() -> None:
     parser.add_argument(
         "--caller-dir",
         type=Path,
-        default=None,
-        help="Path to caller repository root.",
+        required=True,
+        help="Path to caller repository root, checked out at the release tag.",
     )
     parser.add_argument(
         "--tap-dir",
@@ -124,8 +124,12 @@ def main() -> None:
     args.version = args.version.lstrip("v")
 
     with log_group("1/4 Validate formula configuration"):
+        caller_dir: Path = args.caller_dir.resolve()
+        if not caller_dir.exists():
+            sys.exit(f"Caller directory not found: {caller_dir}")
+
         package_name, formula_path, relative_formula = resolve_and_validate_formula(
-            caller_dir=args.caller_dir,
+            caller_dir=caller_dir,
             tap_dir=args.tap_dir,
             formula_path=args.formula_path,
             package_name=args.package,
@@ -144,27 +148,10 @@ def main() -> None:
         log(f"Resolved root sdist:\n  URL: {new_url}\n  SHA: {new_sha}")
 
     with log_group("3/4 Resolve Python resources"):
-        # 3. Resolve the dependency tree via uv pip compile
-        log("Resolving dependency tree...")
+        # 3. Pin the caller's locked runtime dependencies
+        log(f"Exporting locked dependencies from {caller_dir}...")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            reqs_in = tmp_path / "reqs.in"
-            reqs_txt = tmp_path / "reqs.txt"
-            reqs_in.write_text(f"{package_name}=={args.version}", encoding="utf-8")
-
-            run_cmd(
-                [
-                    "uv",
-                    "pip",
-                    "compile",
-                    "--no-annotate",
-                    "--no-header",
-                    *target_resolution_args(formula_path),
-                    str(reqs_in),
-                    "-o",
-                    str(reqs_txt),
-                ]
-            )
+            reqs_txt = locked_requirements(caller_dir, formula_path, Path(tmp_dir))
 
             # 4. Parse requirements and query PyPI directly
             log("Resolving PyPI resource blocks...")
