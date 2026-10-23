@@ -24,13 +24,14 @@ format: sync
     uv run rumdl fmt .
     @printf "{{ green }}✔ Formatting complete{{ nc }}\n"
 
-# Run linters and check formatting (Ruff and Markdown)
+# Run linters and check formatting (Ruff, Markdown, and GitHub Actions)
 lint: sync
     @printf "\n{{ blue }}=== Running Linters ==={{ nc }}\n"
     uv run ruff check .
     uv run ruff format --check .
     uv run rumdl check .
     uv run rumdl fmt --check .
+    uv run zizmor --offline .github/
     @printf "{{ green }}✔ Linting passed{{ nc }}\n"
 
 # Run static type checking with Mypy

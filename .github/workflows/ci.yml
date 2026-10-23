@@ -43,7 +43,7 @@ jobs:
     - name: Audit GitHub Actions workflows with zizmor
       env:
         GH_TOKEN: ${{ github.token }} # enables zizmor's online audits
-      run: uv run zizmor --format github .github
+      run: uv run zizmor --format github .github/
 
     - name: Type check with Mypy
       run: uv run mypy .
