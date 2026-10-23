@@ -41,7 +41,9 @@ jobs:
       run: uv run rumdl fmt --check --output-format github .
 
     - name: Audit GitHub Actions workflows with zizmor
-      run: uv run zizmor --offline --format github .github/
+      env:
+        GH_TOKEN: ${{ github.token }} # enables zizmor's online audits
+      run: uv run zizmor --format github .github/
 
     - name: Type check with Mypy
       run: uv run mypy .
