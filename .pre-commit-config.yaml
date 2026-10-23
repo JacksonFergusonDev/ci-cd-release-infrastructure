@@ -25,7 +25,7 @@ repos:
       - id: check-json
       - id: check-toml
 
-  # Local Python + Markdown Toolchain (Managed via uv.lock)
+  # Local Python, Markdown, and GitHub Actions Toolchain (Managed via uv.lock)
   - repo: local
     hooks:
       - id: uv-lock-check
@@ -72,10 +72,10 @@ repos:
 
       - id: zizmor
         name: zizmor
-        entry: uv run zizmor
+        entry: uv run zizmor --offline .github/
         language: system
-        files: ^\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml)$
-        require_serial: true
+        pass_filenames: false
+        files: ^\.github/(workflows/.*\.ya?ml|actions/.*)$
 
       - id: pytest
         name: pytest
