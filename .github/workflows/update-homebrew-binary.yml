@@ -78,7 +78,7 @@ permissions:
 jobs:
   update-homebrew-binary:
     name: Sync Prebuilt Binary Formula
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
