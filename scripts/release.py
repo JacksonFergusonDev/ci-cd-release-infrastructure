@@ -5,14 +5,15 @@
 # ]
 # ///
 
-"""Standalone release orchestration script for uv-based Python projects.
+"""Standalone release orchestration script for uv-based Python and Cargo Rust projects.
 
 Executes a two-phase release workflow:
 1. Phase 1 (Pre-Flight): Read-only validations (clean working tree, branch guard,
    remote sync check, dry-run SemVer computation, local & remote tag collision checks).
-2. Phase 2 (Transactional Execution): Atomically updates pyproject.toml, updates lockfile,
-   creates release commit, creates annotated tag, and atomically pushes the branch and
-   that tag to remote, with automated rollback if any step fails or is interrupted.
+2. Phase 2 (Transactional Execution): Atomically updates pyproject.toml or Cargo.toml,
+   updates the corresponding lockfile (uv.lock or Cargo.lock), creates a release commit,
+   creates an annotated tag, and atomically pushes the branch and that tag to remote,
+   with automated rollback if any step fails or is interrupted.
 """
 
 import argparse
@@ -23,8 +24,9 @@ import subprocess
 import sys
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Any, Literal, TextIO
 
 import tomlkit
 
@@ -32,6 +34,109 @@ SEMVER_RE = re.compile(
     r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
     r"(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
 )
+
+
+@dataclass(frozen=True)
+class ProjectManifest:
+    """Metadata describing the version manifest and lockfile for a repository."""
+
+    kind: Literal["python", "cargo"]
+    manifest_path: Path
+    lock_path: Path
+    lock_tool: str
+    lock_cmd: tuple[str, ...]
+    version_keys: tuple[str, ...]
+
+
+def _read_nested_str(doc: Any, keys: tuple[str, ...]) -> str | None:
+    """Return a string value at a nested TOML key path, or None if missing/non-string."""
+    current: Any = doc
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return str(current) if isinstance(current, str) else None
+
+
+def detect_project(root: Path = Path()) -> ProjectManifest:
+    """Detect whether the working directory is a Python (uv) or Rust (Cargo) project.
+
+    Supports pure Python (`pyproject.toml` with static `[project].version`),
+    single-crate Rust (`Cargo.toml` with `[package].version`), Cargo workspaces
+    (`Cargo.toml` with `[workspace.package].version`), and hybrid Rust/maturin
+    projects that have both `Cargo.toml` and `pyproject.toml` with
+    `dynamic = ["version"]`.
+    """
+    pyproject_path = root / "pyproject.toml"
+    cargo_path = root / "Cargo.toml"
+
+    if pyproject_path.exists():
+        try:
+            doc = tomlkit.parse(pyproject_path.read_text(encoding="utf-8"))
+        except Exception:
+            doc = None
+        if doc is not None and _read_nested_str(doc, ("project", "version")):
+            return ProjectManifest(
+                kind="python",
+                manifest_path=Path("pyproject.toml"),
+                lock_path=Path("uv.lock"),
+                lock_tool="uv",
+                lock_cmd=("uv", "lock"),
+                version_keys=("project", "version"),
+            )
+
+    if cargo_path.exists():
+        version_keys: tuple[str, ...] = ("package", "version")
+        try:
+            cargo_doc = tomlkit.parse(cargo_path.read_text(encoding="utf-8"))
+        except Exception:
+            cargo_doc = None
+        if (
+            cargo_doc is not None
+            and _read_nested_str(cargo_doc, ("package", "version")) is None
+            and _read_nested_str(cargo_doc, ("workspace", "package", "version"))
+            is not None
+        ):
+            version_keys = ("workspace", "package", "version")
+        return ProjectManifest(
+            kind="cargo",
+            manifest_path=Path("Cargo.toml"),
+            lock_path=Path("Cargo.lock"),
+            lock_tool="cargo",
+            lock_cmd=("cargo", "update", "--workspace", "--offline", "--quiet"),
+            version_keys=version_keys,
+        )
+
+    if pyproject_path.exists():
+        return ProjectManifest(
+            kind="python",
+            manifest_path=Path("pyproject.toml"),
+            lock_path=Path("uv.lock"),
+            lock_tool="uv",
+            lock_cmd=("uv", "lock"),
+            version_keys=("project", "version"),
+        )
+
+    raise FileNotFoundError(
+        "Neither pyproject.toml nor Cargo.toml found in working directory."
+    )
+
+
+def _get_version(doc: Any, keys: tuple[str, ...]) -> str:
+    """Read a required string version at the given TOML key path."""
+    value = _read_nested_str(doc, keys)
+    if value is None:
+        dotted = ".".join(keys)
+        raise KeyError(f"Missing string version at '{dotted}'.")
+    return value
+
+
+def _set_version(doc: Any, keys: tuple[str, ...], version: str) -> None:
+    """Update a version field in-place inside a tomlkit document."""
+    current: Any = doc
+    for key in keys[:-1]:
+        current = current[key]
+    current[keys[-1]] = version
 
 
 _OUTPUT_COLORS = {
@@ -156,7 +261,7 @@ def compute_bumped_version(current_version: str, part: str) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse release command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Safely cuts an atomic release for uv-based Python projects."
+        description="Safely cuts an atomic release for uv Python or Cargo Rust projects."
     )
     parser.add_argument(
         "part", choices=["major", "minor", "patch"], help="The version part to bump"
@@ -200,8 +305,14 @@ def main(argv: list[str] | None = None) -> None:
     # --------------------------------------------------
     _output("Pre-flight checks", prefix="phase", blank=True)
     _output(f"Branch: {args.branch} | Remote: {args.remote}")
+    try:
+        manifest = detect_project()
+    except FileNotFoundError as e:
+        _output(str(e), prefix="error", stderr=True)
+        sys.exit(1)
+
     _output("Checking tool prerequisites", prefix="1/6")
-    for tool in ("git", "uv"):
+    for tool in ("git", manifest.lock_tool):
         if not shutil.which(tool):
             _output(
                 f"Required tool '{tool}' not found in PATH.",
@@ -262,24 +373,16 @@ def main(argv: list[str] | None = None) -> None:
         )
         sys.exit(1)
 
-    _output("Validating pyproject.toml & SemVer", prefix="5/6")
-    pyproject_path = Path("pyproject.toml")
-    if not pyproject_path.exists():
-        _output(
-            "pyproject.toml not found in working directory.",
-            prefix="error",
-            stderr=True,
-        )
-        sys.exit(1)
-
+    _output(f"Validating {manifest.manifest_path} & SemVer", prefix="5/6")
+    manifest_path = manifest.manifest_path
     try:
-        raw_text = pyproject_path.read_text(encoding="utf-8")
+        raw_text = manifest_path.read_text(encoding="utf-8")
         doc = tomlkit.parse(raw_text)
-        current_version = str(doc["project"]["version"])
+        current_version = _get_version(doc, manifest.version_keys)
         new_version = compute_bumped_version(current_version, args.part)
     except Exception as e:
         _output(
-            f"Failed to read or calculate version from pyproject.toml: {e}",
+            f"Failed to read or calculate version from {manifest_path}: {e}",
             prefix="error",
             stderr=True,
         )
@@ -336,13 +439,13 @@ def main(argv: list[str] | None = None) -> None:
     initial_rev = local_hash
 
     # Snapshot what Phase 2 may touch so rollback restores it exactly, including
-    # a uv.lock that is new or gitignored (git alone can't restore those).
-    lock_path = Path("uv.lock")
+    # a lockfile that is new or gitignored (git alone can't restore those).
+    lock_path = manifest.lock_path
     snapshots = {
         path: path.read_bytes() if path.exists() else None
-        for path in (pyproject_path, lock_path)
+        for path in (manifest_path, lock_path)
     }
-    lock_ignored = run_cmd(["git", "check-ignore", "-q", "uv.lock"], check=False)
+    lock_ignored = run_cmd(["git", "check-ignore", "-q", lock_path.name], check=False)
 
     tag_created = False
     files_mutated = False
@@ -395,21 +498,22 @@ def main(argv: list[str] | None = None) -> None:
             )
 
     try:
-        # 1. Mutate pyproject.toml
-        _output(f"Updating pyproject.toml to version {new_version}", prefix="1/5")
-        doc["project"]["version"] = new_version
+        # 1. Mutate manifest
+        _output(f"Updating {manifest_path} to version {new_version}", prefix="1/5")
+        _set_version(doc, manifest.version_keys, new_version)
         files_mutated = True
-        atomic_write_text(pyproject_path, tomlkit.dumps(doc))
+        atomic_write_text(manifest_path, tomlkit.dumps(doc))
 
         # 2. Synchronize lockfile
-        _output("Updating lockfile via uv lock", prefix="2/5")
-        run_cmd(["uv", "lock"], capture=False)
+        lock_cmd_str = " ".join(manifest.lock_cmd)
+        _output(f"Updating lockfile via {lock_cmd_str}", prefix="2/5")
+        run_cmd(list(manifest.lock_cmd), capture=False)
 
         # 3. Stage and commit
         _output(f"Creating release commit for {new_version}", prefix="3/5")
-        release_files = ["pyproject.toml"]
+        release_files = [manifest_path.name]
         if lock_path.exists() and lock_ignored.returncode != 0:
-            release_files.append("uv.lock")
+            release_files.append(lock_path.name)
         run_cmd(["git", "add", *release_files])
         run_cmd(["git", "commit", "-m", f"chore: bump version to {new_version}"])
 

@@ -1,0 +1,118 @@
+name: Update Homebrew Formula (Prebuilt Binary)
+description: >-
+  Render or splice prebuilt binary archive URLs and SHA256 checksums into a
+  Homebrew formula. Internal to the update-homebrew-binary reusable workflow;
+  resolved via `$/` so the script always matches the workflow's own commit.
+
+inputs:
+  tag:
+    description: Release tag or version (e.g., v1.0.0)
+    required: true
+  repository:
+    description: GitHub repository slug (e.g., owner/repo)
+    required: true
+  formula_path:
+    description: Formula path relative to the tap root (e.g., Formula/dark-matter.rb)
+    required: true
+  tap_dir:
+    description: Path to the Homebrew tap checkout
+    required: true
+  artifacts_dir:
+    description: Path to the downloaded release archives / checksum files
+    required: true
+  archive_template:
+    description: Archive filename template using {version} and {target}
+    required: true
+  targets:
+    description: Comma-separated target triples
+    required: true
+  desc:
+    description: Formula description (if set, renders full formula; otherwise splices in place)
+    required: false
+    default: ''
+  homepage:
+    description: Formula homepage URL (optional, render mode only)
+    required: false
+    default: ''
+  license:
+    description: SPDX license identifier (optional, render mode only)
+    required: false
+    default: 'MIT'
+  binary_name:
+    description: Installed binary name (optional, render mode only)
+    required: false
+    default: ''
+  version_pattern:
+    description: Regex body for `test do` matching `<binary> --version` (optional, render mode only)
+    required: false
+    default: ''
+  cargo_path:
+    description: Workspace member path for `head` cargo builds (optional, render mode only)
+    required: false
+    default: ''
+  head_branch:
+    description: Git branch for `head do` builds (optional, render mode only)
+    required: false
+    default: 'main'
+
+outputs:
+  formula_name:
+    description: Resolved formula name (stem)
+    value: ${{ steps.update.outputs.formula_name }}
+  formula_path:
+    description: Formula path relative to the tap root
+    value: ${{ steps.update.outputs.formula_path }}
+  version:
+    description: Normalized semantic version without leading v
+    value: ${{ steps.update.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Update Binary Formula
+      id: update
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        REPOSITORY: ${{ inputs.repository }}
+        FORMULA_PATH: ${{ inputs.formula_path }}
+        TAP_DIR: ${{ inputs.tap_dir }}
+        ARTIFACTS_DIR: ${{ inputs.artifacts_dir }}
+        ARCHIVE_TEMPLATE: ${{ inputs.archive_template }}
+        TARGETS: ${{ inputs.targets }}
+        DESC: ${{ inputs.desc }}
+        HOMEPAGE: ${{ inputs.homepage }}
+        LICENSE_ID: ${{ inputs.license }}
+        BINARY_NAME: ${{ inputs.binary_name }}
+        VERSION_PATTERN: ${{ inputs.version_pattern }}
+        CARGO_PATH: ${{ inputs.cargo_path }}
+        HEAD_BRANCH: ${{ inputs.head_branch }}
+      run: |
+        REPO_ROOT="$GITHUB_ACTION_PATH/../../.."
+        ARGS=(
+          --version "$TAG"
+          --repository "$REPOSITORY"
+          --formula-path "$FORMULA_PATH"
+          --tap-dir "$TAP_DIR"
+          --artifacts-dir "$ARTIFACTS_DIR"
+          --archive-template "$ARCHIVE_TEMPLATE"
+          --targets "$TARGETS"
+          --license "$LICENSE_ID"
+          --head-branch "$HEAD_BRANCH"
+        )
+        if [ -n "$DESC" ]; then
+          ARGS+=(--desc "$DESC")
+        fi
+        if [ -n "$HOMEPAGE" ]; then
+          ARGS+=(--homepage "$HOMEPAGE")
+        fi
+        if [ -n "$BINARY_NAME" ]; then
+          ARGS+=(--binary-name "$BINARY_NAME")
+        fi
+        if [ -n "$VERSION_PATTERN" ]; then
+          ARGS+=(--version-pattern "$VERSION_PATTERN")
+        fi
+        if [ -n "$CARGO_PATH" ]; then
+          ARGS+=(--cargo-path "$CARGO_PATH")
+        fi
+        PYTHONPATH="$REPO_ROOT" uv run --no-project "$REPO_ROOT/scripts/update_homebrew_binary.py" "${ARGS[@]}"

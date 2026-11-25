@@ -1,0 +1,194 @@
+name: Update Homebrew Tap (Prebuilt Binary)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'The release tag or version (e.g., v1.0.0)'
+        required: true
+        type: string
+      formula_path:
+        description: 'Relative path to the formula in the tap (e.g., Formula/dark-matter.rb)'
+        required: true
+        type: string
+      artifact_pattern:
+        description: 'Artifact name glob uploaded earlier in this workflow run (e.g., bin-* or cli-*)'
+        required: true
+        type: string
+      archive_template:
+        description: 'Archive filename template using {version} and {target}'
+        required: true
+        type: string
+      targets:
+        description: 'Comma-separated target triples (e.g., aarch64-apple-darwin,x86_64-apple-darwin)'
+        required: true
+        type: string
+      desc:
+        description: 'Formula description (if set, renders a full formula; otherwise splices the existing formula in place)'
+        required: false
+        type: string
+        default: ''
+      homepage:
+        description: 'Formula homepage URL (render mode only; defaults to GitHub repository URL)'
+        required: false
+        type: string
+        default: ''
+      license:
+        description: 'SPDX license identifier (render mode only)'
+        required: false
+        type: string
+        default: 'MIT'
+      binary_name:
+        description: 'Binary filename installed by bin.install (render mode only; defaults to formula stem)'
+        required: false
+        type: string
+        default: ''
+      version_pattern:
+        description: 'Ruby regex body for `test do` matching `<binary> --version` (render mode only)'
+        required: false
+        type: string
+        default: ''
+      cargo_path:
+        description: 'Optional Cargo workspace path for `head` builds (render mode only)'
+        required: false
+        type: string
+        default: ''
+      head_branch:
+        description: 'Git branch for `head do` builds (render mode only; empty string omits head)'
+        required: false
+        type: string
+        default: 'main'
+      tap_repository:
+        description: 'Target Homebrew tap repository'
+        required: false
+        type: string
+        default: 'JacksonFergusonDev/homebrew-tap'
+      dry_run:
+        description: 'Render/splice and upload dry-run-formula artifact, skipping commit and push'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      TAP_GITHUB_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  update-homebrew-binary:
+    name: Sync Prebuilt Binary Formula
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out Homebrew Tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ inputs.tap_repository }}
+          path: homebrew-tap
+          persist-credentials: false
+
+      - name: Download release binary artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.artifact_pattern }}
+          path: ${{ runner.temp }}/release-artifacts
+          merge-multiple: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: false
+          python-version: "3.14"
+
+      - name: Update Formula
+        id: update
+        uses: $/.github/actions/update-formula-binary
+        with:
+          tag: ${{ inputs.tag }}
+          repository: ${{ github.repository }}
+          formula_path: ${{ inputs.formula_path }}
+          tap_dir: homebrew-tap
+          artifacts_dir: ${{ runner.temp }}/release-artifacts
+          archive_template: ${{ inputs.archive_template }}
+          targets: ${{ inputs.targets }}
+          desc: ${{ inputs.desc }}
+          homepage: ${{ inputs.homepage }}
+          license: ${{ inputs.license }}
+          binary_name: ${{ inputs.binary_name }}
+          version_pattern: ${{ inputs.version_pattern }}
+          cargo_path: ${{ inputs.cargo_path }}
+          head_branch: ${{ inputs.head_branch }}
+
+      - name: Validate Ruby syntax and print formula
+        env:
+          FORMULA_PATH: ${{ steps.update.outputs.formula_path }}
+        run: |
+          if command -v ruby >/dev/null 2>&1; then
+            ruby -c "homebrew-tap/$FORMULA_PATH"
+          fi
+          cat "homebrew-tap/$FORMULA_PATH"
+
+      - name: Upload dry-run formula artifact
+        if: inputs.dry_run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dry-run-formula
+          path: homebrew-tap/${{ steps.update.outputs.formula_path }}
+          if-no-files-found: error
+
+      - name: Commit and Push
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ steps.update.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORMULA_PATH: ${{ steps.update.outputs.formula_path }}
+          FORMULA_NAME: ${{ steps.update.outputs.formula_name }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FORMULA_PATH"
+
+          if git diff --cached --quiet; then
+            echo "No formula changes to commit."
+            exit 0
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            {
+              echo "### Dry run: commit and push skipped"
+              echo
+              echo '```diff'
+              git diff --cached
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git diff --cached --stat
+            echo "::notice::Dry run: formula updated and uploaded; commit and push skipped."
+            exit 0
+          fi
+
+          if [ -z "$TAP_GITHUB_TOKEN" ]; then
+            echo "::warning::TAP_GITHUB_TOKEN isn't set, so the Homebrew formula wasn't updated."
+            exit 0
+          fi
+
+          git commit -m "feat($FORMULA_NAME): update to $VERSION"
+
+          # Credentials are not persisted by checkout; supply them only for the push.
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_GITHUB_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$AUTH_HEADER"
+          authed_git() { git -c "http.https://github.com/.extraheader=$AUTH_HEADER" "$@"; }
+
+          # Another release may have pushed to the tap meanwhile; rebase and retry.
+          for attempt in 1 2 3; do
+            if authed_git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/3); rebasing onto the latest tap."
+            authed_git pull --rebase
+          done
+          echo "::error::Could not push to the tap after 3 attempts."
+          exit 1
