@@ -22,21 +22,26 @@ Centralized infrastructure repository for reusable GitHub Actions workflows and 
 .
 ├── .github/
 │   ├── actions/
-│   │   ├── update-formula-pypi/   # Internal step for update-homebrew.yml
-│   │   └── update-formula-local/  # Internal step for update-homebrew-local.yml
+│   │   ├── update-formula-binary/ # Internal step for update-homebrew-binary.yml
+│   │   ├── update-formula-local/  # Internal step for update-homebrew-local.yml
+│   │   └── update-formula-pypi/   # Internal step for update-homebrew.yml
 │   └── workflows/
 │       ├── ci.yml                     # Internal verification pipeline
 │       ├── update-homebrew.yml        # Reusable workflow for PyPI-published packages
+│       ├── update-homebrew-binary.yml # Reusable workflow for prebuilt-binary releases
 │       └── update-homebrew-local.yml  # Reusable workflow using caller repository manifests
 ├── scripts/
 │   ├── _brew_utils.py             # Shared PyPI querying and Homebrew splicing logic
-│   ├── release.py                 # Turnkey atomic release orchestrator
+│   ├── release.py                 # Turnkey atomic release orchestrator (uv & Cargo)
 │   ├── update_homebrew.py         # PyPI polling & Homebrew formula dependency splicing
+│   ├── update_homebrew_binary.py  # Prebuilt-binary Homebrew formula renderer & splicer
 │   └── update_homebrew_local.py   # Manifest-based Homebrew formula dependency splicing
 └── tests/
     ├── test_brew_utils.py         # Unit tests for shared Homebrew utilities
     ├── test_release.py            # Unit tests for release orchestration & rollback
+    ├── test_release_git.py        # Integration tests against real git, uv, and cargo
     ├── test_update_homebrew.py    # Unit tests for PyPI synchronization
+    ├── test_update_homebrew_binary.py # Unit tests for prebuilt-binary formula updates
     └── test_update_homebrew_local.py # Unit tests for local manifest synchronization
 ```
 
@@ -89,6 +94,34 @@ jobs:
       TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 ```
 
+### 3. Prebuilt Binary Homebrew Tap Updater (`update-homebrew-binary.yml`)
+
+Updates a Homebrew formula from prebuilt release archive artifacts (`.tar.gz` and/or `.sha256`) uploaded earlier in the caller's release workflow. Runs on `ubuntu-24.04-arm` and supports two modes:
+
+- **Render mode** (`desc` set): generates a complete, `brew style`-clean prebuilt-binary formula (`on_macos` / `on_linux` + `on_arm` / `on_intel`, or macOS-only `Hardware::CPU.arm?`) with optional `head do` Cargo builds.
+- **Splice mode** (`desc` omitted): updates `version` and each target's `url` and `sha256` in place inside an existing tap formula, preserving custom `head`, `install`, and `test` blocks.
+
+**Caller Workflow Usage (Render Mode):**
+
+```yaml
+jobs:
+  sync-homebrew:
+    name: Update Homebrew formula
+    needs: [verify, build-binaries, github-release]
+    uses: JacksonFergusonDev/ci-cd-release-infrastructure/.github/workflows/update-homebrew-binary.yml@main
+    with:
+      tag: v${{ needs.verify.outputs.version }}
+      formula_path: Formula/my-cli.rb
+      artifact_pattern: bin-*
+      archive_template: my-cli-v{version}-{target}.tar.gz
+      targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-unknown-linux-gnu,x86_64-unknown-linux-gnu
+      desc: Fast CLI tool
+      license: MIT
+      dry_run: ${{ github.event_name != 'push' }}
+    secrets:
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+```
+
 ### Testing Workflow Changes
 
 Both workflows accept `dry_run: true`, which runs every step through `brew audit` but skips the commit and push, writing the formula diff to the job summary instead. To exercise a branch of this repository end to end without touching the tap, point a caller's `workflow_dispatch` job at the branch:
@@ -122,23 +155,24 @@ They detect `GITHUB_ACTIONS=true` to emit collapsible log groups, warning/error 
 
 Output uses numbered steps, aligned status prefixes, and color when writing to a terminal. Redirected output stays plain text; set `NO_COLOR` to disable color. Errors and rollback messages are written to stderr.
 
-A turnkey, atomic release orchestrator for uv-based Python projects. Executes a two-phase workflow:
+A turnkey, atomic release orchestrator for uv-based Python and Cargo Rust projects (including Cargo workspaces and hybrid Rust/maturin repos). Executes a two-phase workflow:
 
 1. **Phase 1: Pre-Flight Checks (Read-Only)**
-   - Verifies tool prerequisites (`git`, `uv`).
+   - Detects the project manifest (`pyproject.toml` with static `[project].version`, or `Cargo.toml` with `[package].version` / `[workspace.package].version`).
+   - Verifies tool prerequisites (`git`, plus `uv` or `cargo`).
    - Ensures the active branch matches `--branch` (default: `main`).
    - Rejects dirty working directories with uncommitted or untracked changes.
    - Verifies synchronization with remote (`git fetch` and hash comparison).
-   - Validates `pyproject.toml` and SemVer structure.
+   - Validates the manifest and SemVer structure.
    - Checks for local and remote tag collisions (`git ls-remote`).
    - Executes any optional `--pre-flight` commands.
 1. **Phase 2: Transactional Execution & Rollback**
-   - Updates `[project.version]` in `pyproject.toml`.
-   - Updates `uv.lock` via `uv lock` (committed unless the lockfile is gitignored).
+   - Updates the version in `pyproject.toml` or `Cargo.toml`.
+   - Updates `uv.lock` (`uv lock`) or `Cargo.lock` (`cargo update --workspace --offline --quiet`), committed unless the lockfile is gitignored.
    - Stages and creates release commit.
    - Creates annotated tag.
    - Atomically pushes only the release branch and the new tag (`git push --atomic origin HEAD:refs/heads/<branch> refs/tags/<tag>`), unless `--no-push` is specified. Other local tags are never pushed.
-   - Automatically rolls back (deletes the tag, resets to the starting commit, and restores `pyproject.toml` and `uv.lock` byte-for-byte, removing a lockfile the release created) if any step fails or is aborted via `Ctrl+C`. If a rollback step fails, it says so and names the commit to restore manually.
+   - Automatically rolls back (deletes the tag, resets to the starting commit, and restores the manifest and lockfile byte-for-byte, removing a lockfile the release created) if any step fails or is aborted via `Ctrl+C`. If a rollback step fails, it says so and names the commit to restore manually.
 
 #### Flags & Options
 

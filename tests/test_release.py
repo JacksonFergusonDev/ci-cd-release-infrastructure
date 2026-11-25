@@ -337,3 +337,117 @@ def test_main_rollback_reports_failures(mock_release_env: Path, mocker, capsys) 
     err = capsys.readouterr().err
     assert "Rollback incomplete. Could not: delete tag v1.1.0; reset to aaaa1111" in err
     assert "Rollback complete" not in err
+
+
+def test_detect_project_single_crate_cargo(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "demo"\nversion = "0.1.4"\n', encoding="utf-8"
+    )
+    manifest = release.detect_project(tmp_path)
+    assert manifest.kind == "cargo"
+    assert manifest.manifest_path == Path("Cargo.toml")
+    assert manifest.lock_path == Path("Cargo.lock")
+    assert manifest.lock_tool == "cargo"
+    assert manifest.version_keys == ("package", "version")
+
+
+def test_detect_project_cargo_workspace(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text(
+        '[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nversion = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    manifest = release.detect_project(tmp_path)
+    assert manifest.kind == "cargo"
+    assert manifest.version_keys == ("workspace", "package", "version")
+
+
+def test_detect_project_hybrid_maturin_uses_cargo(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "dark-matter-cli"\ndynamic = ["version"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "dark-matter"\nversion = "0.1.4"\n', encoding="utf-8"
+    )
+    manifest = release.detect_project(tmp_path)
+    assert manifest.kind == "cargo"
+    assert manifest.manifest_path == Path("Cargo.toml")
+    assert manifest.version_keys == ("package", "version")
+
+
+def test_detect_project_missing_manifest_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        release.main(["patch"])
+    assert exc.value.code == 1
+    assert "Neither pyproject.toml nor Cargo.toml found" in capsys.readouterr().err
+
+
+def test_detect_project_pyproject_without_version_falls_back(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "broken"\n', encoding="utf-8"
+    )
+    manifest = release.detect_project(tmp_path)
+    assert manifest.kind == "python"
+    assert manifest.manifest_path == Path("pyproject.toml")
+
+
+def test_main_cargo_release_no_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker, capsys
+) -> None:
+    cargo = tmp_path / "Cargo.toml"
+    cargo.write_text('[package]\nname = "demo"\nversion = "0.1.4"\n', encoding="utf-8")
+    cargo_lock = tmp_path / "Cargo.lock"
+    cargo_lock.write_text("# lock\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    mocker.patch("shutil.which", return_value="/usr/bin/tool")
+    executed_cmds = []
+
+    def fake_run(cmd, **kwargs):
+        executed_cmds.append(cmd)
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n")
+        if cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "origin/main"]):
+            return subprocess.CompletedProcess(cmd, 0, stdout="aaaa1111\n")
+        if cmd == ["git", "check-ignore", "-q", "Cargo.lock"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    mocker.patch("scripts.release.run_cmd", side_effect=fake_run)
+
+    release.main(["minor", "--no-push"])
+
+    doc = tomlkit.parse(cargo.read_text(encoding="utf-8"))
+    assert doc["package"]["version"] == "0.2.0"
+    assert ["cargo", "update", "--workspace", "--offline", "--quiet"] in executed_cmds
+    assert ["git", "add", "Cargo.toml", "Cargo.lock"] in executed_cmds
+    assert ["git", "commit", "-m", "chore: bump version to 0.2.0"] in executed_cmds
+    assert "Release v0.2.0 created locally; push skipped." in capsys.readouterr().out
+
+
+def test_main_cargo_workspace_release_no_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker
+) -> None:
+    cargo = tmp_path / "Cargo.toml"
+    cargo.write_text(
+        '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "1.2.3"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    mocker.patch("shutil.which", return_value="/usr/bin/tool")
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n")
+        if cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "origin/main"]):
+            return subprocess.CompletedProcess(cmd, 0, stdout="aaaa1111\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    mocker.patch("scripts.release.run_cmd", side_effect=fake_run)
+
+    release.main(["patch", "--no-push"])
+
+    doc = tomlkit.parse(cargo.read_text(encoding="utf-8"))
+    assert doc["workspace"]["package"]["version"] == "1.2.4"

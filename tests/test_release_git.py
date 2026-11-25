@@ -138,3 +138,51 @@ def test_gitignored_lockfile_is_not_committed(repo: Path) -> None:
         "pyproject.toml"
     )
     assert git("tag", "-l", "v1.0.1", cwd=repo) == "v1.0.1"
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="requires cargo")
+def test_cargo_release_updates_cargo_toml_and_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = Test\n\temail = test@example.com\n"
+        "[init]\n\tdefaultBranch = main\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    origin = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    git("init", "--bare", "-q", str(origin), cwd=tmp_path)
+    git("clone", "-q", str(origin), str(work), cwd=tmp_path)
+
+    (work / "src").mkdir()
+    (work / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (work / "Cargo.toml").write_text(
+        '[package]\nname = "demo-rs"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cargo", "generate-lockfile", "--offline", "--quiet"], cwd=work, check=True
+    )
+    git("add", ".", cwd=work)
+    git("commit", "-q", "-m", "init", cwd=work)
+    git("push", "-q", "origin", "main", cwd=work)
+
+    monkeypatch.chdir(work)
+    release.main(["minor"])
+
+    doc = tomlkit.parse((work / "Cargo.toml").read_text(encoding="utf-8"))
+    assert doc["package"]["version"] == "0.2.0"
+    assert 'version = "0.2.0"' in (work / "Cargo.lock").read_text(encoding="utf-8")
+    assert git("tag", "-l", cwd=origin).splitlines() == ["v0.2.0"]
+    assert git("show", "--name-only", "--format=", "HEAD", cwd=work).splitlines() == [
+        "Cargo.lock",
+        "Cargo.toml",
+    ] or git("show", "--name-only", "--format=", "HEAD", cwd=work).splitlines() == [
+        "Cargo.toml",
+        "Cargo.lock",
+    ]
